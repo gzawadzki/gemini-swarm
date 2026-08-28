@@ -125,7 +125,7 @@ schema on the fly, the scripts below depend on this shape:
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest tests/test_auth.py and report the result.",
       "args": [],
-      "timeout_ms": 900000
+      "timeout_ms": 120000
     }
   ]
 }
@@ -145,7 +145,9 @@ schema on the fly, the scripts below depend on this shape:
 - `args` — extra CLI flags. `launch.sh` injects the auto-approve flag (and
   `--model`/`--effort` for `agy`) automatically; only add *extra* flags here.
 - `timeout_ms` — how long `launch.sh` waits for the agent process to become
-  ready (default 30000 is usually enough).
+  ready (default 30000 is usually enough). herdr's ceiling is **300000 ms**;
+  `launch.sh` clamps anything larger and warns. This is the startup timeout,
+  not a budget for the task itself — tasks run unbounded in the background.
 
 **Reliability trick — don't trust screen-scraping for success/failure.** herdr's
 `idle`/`done`/`blocked` states tell you the agent stopped talking, not that the
@@ -159,6 +161,20 @@ explicit instruction to write a small JSON result file:
 `launch.sh` appends this automatically — you don't need to hand-write it,
 just write the task-specific instructions in `prompt`.
 
+**Delivery trick — never send a long prompt through `herdr agent prompt`.** A
+multi-line brief (blank lines, non-ASCII text, dozens of lines) does not make
+it into the agent's input box: herdr returns `agent_prompted` and the pane sits
+there with an empty prompt, so the launch *looks* successful while nothing was
+actually sent. `launch.sh` therefore writes the full brief to
+`~/.herdr/briefs/<name>.md` (override with `HERDR_SWARM_BRIEF_DIR`) and sends a
+single short line: *"Read the file <path> and carry out the task it describes
+in this worktree."* Keep it that way if you drive herdr by hand — put the text
+in a file, send one line.
+
+The brief dir also holds the result files (`<name>.result.json`). It lives
+outside every repo and worktree on purpose: an agent writing its result file
+must not dirty the tree that `status.sh` checks with `git status --porcelain`.
+
 ## 5. Launch
 
 ```bash
@@ -168,13 +184,17 @@ scripts/launch.sh tasks.json
 For each task this:
 1. `herdr worktree create --cwd <repo> --branch <branch> [--base <base>] --label <name> --no-focus`.
 2. `herdr agent start <name> --kind <kind> --pane <pane_id> -- <auto-approve-flag> [--model ...] [--effort ...] <args...>`.
-3. `herdr agent prompt <name> "<prompt + status-file + commit-discipline instructions>"` — **without**
-   `--wait`, so tasks run in parallel.
-4. Records `{name, kind, branch, base, pane_id, workspace_id, worktree_path, status_file}`
-   into `.herdr-swarm/state.json`.
+3. Writes the full brief (task + commit discipline + result-file instruction)
+   to `<brief_dir>/<name>.md`.
+4. `herdr agent prompt <name> "Read the file <brief> and carry out ..."` — one
+   short line, **without** `--wait`, so tasks run in parallel.
+5. Records `{name, kind, branch, base, pane_id, workspace_id, worktree_path,
+   brief_file, status_file}` into `.herdr-swarm/state.json`.
 
 Launching does not confirm success — only that the agent started and accepted
-the prompt.
+the prompt. `agent_prompted` is not proof the text landed: after a launch,
+check a pane (`scripts/logs.sh <task>`) and confirm the agent is actually
+working before reporting that the swarm is running.
 
 ## 6. Check status
 

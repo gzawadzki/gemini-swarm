@@ -43,7 +43,7 @@ writes the config and drives the scripts. To do it manually:
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest and report the result.",
       "args": [],
-      "timeout_ms": 900000
+      "timeout_ms": 120000
     }
   ]
 }
@@ -55,6 +55,11 @@ parallel:
 ```bash
 scripts/launch.sh tasks.json
 ```
+
+Each task's full brief is written to `~/.herdr/briefs/<name>.md` (override with
+`HERDR_SWARM_BRIEF_DIR`) and the agent only receives a one-line pointer to it —
+long multi-line prompts don't survive `herdr agent prompt`. Result files land
+next to the briefs as `<name>.result.json`.
 
 **3. Check status** — a task is review-ready only when herdr says `idle`/`done`,
 its result file says `success`, **and** its worktree is clean:

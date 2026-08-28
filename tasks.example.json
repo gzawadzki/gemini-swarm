@@ -20,7 +20,7 @@
       "branch": "agent/add-rate-limiter",
       "prompt": "Add a token-bucket rate limiter middleware to src/api/middleware.py, with a unit test in tests/test_rate_limiter.py. Run the new test and make sure it passes.",
       "args": [],
-      "timeout_ms": 1200000
+      "timeout_ms": 300000
     },
     {
       "name": "security-review",
@@ -30,7 +30,7 @@
       "branch": "agent/security-review",
       "prompt": "Review src/auth/ for authentication/authorization vulnerabilities (session handling, token validation, privilege escalation). Fix anything you find with high confidence and add a regression test for each fix.",
       "args": [],
-      "timeout_ms": 1800000
+      "timeout_ms": 300000
     },
     {
       "name": "fix-auth-bug",
@@ -39,7 +39,7 @@
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py. Then run `pytest tests/test_auth.py` and confirm it passes.",
       "args": [],
-      "timeout_ms": 900000
+      "timeout_ms": 120000
     }
   ]
 }
