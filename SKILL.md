@@ -45,20 +45,20 @@ CLI has no comparable model menu, so this step only applies to `kind: "agy"`.
 
 | Model (`--model` slug)       | Effort levels            | "Say it like the model would"                                                                                                                                                                              | Use it for |
 |-------------------------------|----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
-| `gemini-3.7-flash`            | fast, low, medium, high    | "Jestem tani i szybki, rzucaj we mnie drobiazgi — formatowanie, boilerplate, mechaniczne poprawki. Nie trzymaj mnie przy trudnych bugach."                                                                | Proste, mechaniczne, dobrze zdefiniowane zadania. `low`/`medium` effort. |
-| `gemini-3.1-pro`              | low, high                  | "Jestem domyślnym wyborem do większości zadań agentowych — 1M kontekstu, stabilny na dużych repo. Jak nie wiesz co wybrać, wybierz mnie."                                                                 | Standardowe zadania średniej złożoności, duże repo. **Default**, gdy nic innego nie pasuje wyraźnie lepiej. |
-| `claude-sonnet-4-6-thinking`  | (fixed, thinking on)       | "Dobry do rozumowania krok po kroku — code review, refaktoryzacja, wyjaśnianie 'dlaczego' — bez ceny Opusa."                                                                                              | Zadania wymagające wnioskowania, ale nie ekstremalne. Review, nietrywialny refaktor. |
-| `claude-opus-4-6-thinking`    | (fixed, thinking on)       | "Najcięższe działo tego zestawu. Użyj mnie, gdy Sonnet i Gemini Pro już zawiodły albo zadanie jest naprawdę trudne. Drogi — nie marnuj mnie na proste rzeczy."                                            | Trudne/krytyczne: security review, wredne bugi, architektura. Ostatnia deska ratunku. |
-| `gpt-oss-120b`                | medium                     | "Open-weight od OpenAI, mniejszy kontekst (400K vs 1M), generalnie poniżej Gemini Pro/Opus w coding. Użyj mnie do stylu zgodnego z GPT albo jako niezależne drugie zdanie."                              | Rzadziej pierwszy wybór — porównanie / drugie zdanie. |
+| `gemini-3.7-flash`            | fast, low, medium, high    | "I'm cheap and fast — throw the small stuff at me: formatting, boilerplate, mechanical fixes. Don't park me on a hard bug."                                                                              | Simple, mechanical, well-defined tasks. `low`/`medium` effort. |
+| `gemini-3.1-pro`              | low, high                  | "I'm the default pick for most agentic work — 1M context, steady on big repos. If you don't know what to choose, choose me."                                                                             | Standard mid-complexity tasks, large repos. **Default** when nothing else fits clearly better. |
+| `claude-sonnet-4-6-thinking`  | (fixed, thinking on)       | "Good at step-by-step reasoning — code review, refactoring, explaining 'why' — without Opus pricing."                                                                                                    | Tasks needing real reasoning but not the extreme end. Review, non-trivial refactor. |
+| `claude-opus-4-6-thinking`    | (fixed, thinking on)       | "The heaviest gun here. Use me when Sonnet and Gemini Pro have already failed, or the task is genuinely hard. Expensive — don't waste me on simple things."                                              | Hard/high-stakes: security review, nasty bugs, architecture. Last resort. |
+| `gpt-oss-120b`                | medium                     | "Open-weight from OpenAI, smaller context (400K vs 1M), generally below Gemini Pro/Opus at coding. Use me for GPT-flavored style, or as an independent second opinion."                                  | Rarely the first pick — comparison / second opinion. |
 
 Routing heuristic when generating `tasks.json`:
-1. Mechaniczne / niskiego ryzyka / dobrze zdefiniowane → `gemini-3.7-flash`.
-2. Zwykła funkcja/bugfix, nic poniżej nie pasuje lepiej → `gemini-3.1-pro` (default).
-3. Wymaga starannego rozumowania (review, refaktor, "dlaczego") → `claude-sonnet-4-6-thinking`.
-4. Naprawdę trudne / wysokiej stawki / poprzednia próba zawiodła → `claude-opus-4-6-thinking`.
-5. Użytkownik chce jawnie porównania stylu GPT → `gpt-oss-120b`.
+1. Mechanical / low-risk / well-defined → `gemini-3.7-flash`.
+2. Ordinary feature or bugfix, nothing below fits better → `gemini-3.1-pro` (default).
+3. Needs careful reasoning (review, refactor, "why") → `claude-sonnet-4-6-thinking`.
+4. Genuinely hard / high-stakes / a previous attempt failed → `claude-opus-4-6-thinking`.
+5. User explicitly wants a GPT-style comparison → `gpt-oss-120b`.
 
-Jeśli użytkownik wprost nazwał model, użyj go — nie nadpisuj heurystyką.
+If the user names a model outright, use it — don't override it with the heuristic.
 
 ## 3. Git workflow — always branch + worktree, review before merge
 

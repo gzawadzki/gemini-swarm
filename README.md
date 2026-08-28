@@ -18,7 +18,7 @@ Clone the repo into your Claude Code skills directory:
 
 ```bash
 git clone https://github.com/gzawadzki/gemini-swarm.git ~/.claude/skills/gemini-swarm
-chmod +x ~/.claude/skills/gemini-swarm/*.sh
+chmod +x ~/.claude/skills/gemini-swarm/scripts/*.sh
 ```
 
 Restart Claude Code. The skill is picked up from `SKILL.md`; ask for it by name
@@ -53,26 +53,26 @@ writes the config and drives the scripts. To do it manually:
 parallel:
 
 ```bash
-./launch.sh tasks.json
+scripts/launch.sh tasks.json
 ```
 
 **3. Check status** — a task is review-ready only when herdr says `idle`/`done`,
 its result file says `success`, **and** its worktree is clean:
 
 ```bash
-./status.sh
+scripts/status.sh
 ```
 
 **4. Review the diff** before merging anything:
 
 ```bash
-./review.sh <task-name>
+scripts/review.sh <task-name>
 ```
 
 **5. Read an agent's output** when something looks wrong:
 
 ```bash
-./logs.sh <task-name> [lines]
+scripts/logs.sh <task-name> [lines]
 ```
 
 State lives in `.herdr-swarm/state.json` (override with `HERDR_SWARM_STATE_DIR`).
