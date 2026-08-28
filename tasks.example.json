@@ -1,0 +1,45 @@
+{
+  "tasks": [
+    {
+      "name": "rename-vars",
+      "kind": "agy",
+      "model": "gemini-3.7-flash",
+      "effort": "medium",
+      "repo": "/absolute/path/to/repo",
+      "branch": "agent/rename-vars",
+      "prompt": "Rename the misleading variable `tmp` to `pending_rows` throughout src/pipeline.py and update any docstrings that reference it.",
+      "args": [],
+      "timeout_ms": 300000
+    },
+    {
+      "name": "add-rate-limiter",
+      "kind": "agy",
+      "model": "gemini-3.1-pro",
+      "effort": "high",
+      "repo": "/absolute/path/to/repo",
+      "branch": "agent/add-rate-limiter",
+      "prompt": "Add a token-bucket rate limiter middleware to src/api/middleware.py, with a unit test in tests/test_rate_limiter.py. Run the new test and make sure it passes.",
+      "args": [],
+      "timeout_ms": 1200000
+    },
+    {
+      "name": "security-review",
+      "kind": "agy",
+      "model": "claude-opus-4-6-thinking",
+      "repo": "/absolute/path/to/repo",
+      "branch": "agent/security-review",
+      "prompt": "Review src/auth/ for authentication/authorization vulnerabilities (session handling, token validation, privilege escalation). Fix anything you find with high confidence and add a regression test for each fix.",
+      "args": [],
+      "timeout_ms": 1800000
+    },
+    {
+      "name": "fix-auth-bug",
+      "kind": "gemini",
+      "repo": "/absolute/path/to/repo",
+      "branch": "agent/fix-auth-bug",
+      "prompt": "Fix the failing test in tests/test_auth.py. Then run `pytest tests/test_auth.py` and confirm it passes.",
+      "args": [],
+      "timeout_ms": 900000
+    }
+  ]
+}
