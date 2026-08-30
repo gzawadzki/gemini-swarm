@@ -176,8 +176,13 @@ trap 'rm -f "$AGY_USAGE_CACHE_PREFIX".* "$SWARM_ACCOUNT_LIST_CACHE"' EXIT
 agy_usage() {
   local acct="${1:-a}" cache="$AGY_USAGE_CACHE_PREFIX.${1:-a}" live
   if [[ -s "$cache" ]]; then cat "$cache"; return 0; fi
-  live=$(account_live) || live=""
-  [[ -z "$live" || "$live" == "$acct" ]] || return 1
+  # With no state file the live account is unknown, and the rest of the code
+  # assumes "a" in that case. Assume it here too: without this, /usage answers
+  # for whoever is signed in and the numbers get filed under the account that
+  # was asked about, so a report can claim account B is empty when there is no
+  # account B at all.
+  live=$(account_live) || live="a"
+  [[ "$live" == "$acct" ]] || return 1
   command -v agy >/dev/null 2>&1 || return 1
   MSYS_NO_PATHCONV=1 timeout 120 agy -p "/usage" 2>/dev/null > "$cache" || return 1
   grep -qE '[0-9]+%' "$cache" || return 1

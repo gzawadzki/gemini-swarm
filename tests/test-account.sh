@@ -165,6 +165,11 @@ echo "== agy_usage refuses to answer for a non-live account =="
 clear_usage
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"
 agy_usage b >/dev/null 2>&1; check "asking about the non-live account -> rc 1" "1" "$?"
+# No state file at all: everything else falls back to "a", so /usage must too,
+# or the numbers of whoever is signed in get filed under account b and the
+# stop-and-report message invents a second account.
+rm -f "$LOCALAPPDATA/herdr-swarm/live-account"
+agy_usage b >/dev/null 2>&1; check "no state file, asking about b -> rc 1" "1" "$?"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
