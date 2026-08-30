@@ -156,7 +156,13 @@ switch ($Mode) {
     "saved live credential (sha=$($live.Sha)) into vault '$Account', which is now recorded as live"
   }
 
-  'sync' { Sync-Live }
+  # Reports failure as an exit code too, so a scripted caller does not read
+  # "cannot sync" as success.
+  'sync' {
+    $out = Sync-Live
+    $out
+    if ($out -like 'cannot sync*') { exit 5 }
+  }
 
   # Exit codes are the interface to scripts/lib.sh, which has to tell these
   # cases apart to decide between "run on the other account", "stop and report"

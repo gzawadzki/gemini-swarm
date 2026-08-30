@@ -150,11 +150,17 @@ account_vault_has() {
   grep -q "^vault $acct " "$SWARM_ACCOUNT_LIST_CACHE"
 }
 
+# Is the swarm allowed to change accounts at all? The opt-out has to gate the
+# swap itself, not just the lookup: account_live falling back to "a" when
+# switching is off would otherwise still let a swap through.
+account_switching_enabled() { [[ "${HERDR_SWARM_NO_SWITCHING:-0}" != "1" ]]; }
+
 # Make account $1 live. Exit codes come straight from agy-account.ps1:
 # 0 done, 3 agents are running so accounts would mix, 4 vault entry empty,
 # 5 no record of which account is live.
 account_switch() {
   local acct="${1:-}" out rc=0
+  account_switching_enabled || return 6
   out=$(MSYS_NO_PATHCONV=1 timeout 60 pwsh -NoProfile -File "$SWARM_ACCOUNT_SCRIPT" \
     -Mode use -Account "$acct" 2>&1) || rc=$?
   [[ -n "$out" ]] && echo "$out" >&2
@@ -239,6 +245,7 @@ agy_exhausted() {
 #   2  the quota could not be read; the printed account is a guess, so the
 #      caller should warn and carry on rather than refuse to launch
 #   3  a switch is needed but agents are still running, so nothing may start
+#   4  a switch is needed but HERDR_SWARM_NO_SWITCHING=1 forbids it
 agy_pick_account() {
   local model="${1:-}" live other rc=0 src=0
   live=$(account_live) || live="a"
@@ -248,6 +255,8 @@ agy_pick_account() {
     1) echo "$live"; return 0 ;;
     2) echo "$live"; return 2 ;;
   esac
+
+  account_switching_enabled || return 4
 
   other=$(account_other "$live")
   account_vault_has "$other" || return 1

@@ -76,7 +76,9 @@ for i in $(seq 0 $((n_tasks - 1))); do
     account=$(agy_pick_account "$model") || pick_rc=$?
     case "$pick_rc" in
       1)
-        echo "ERROR: [$name] both Antigravity accounts are at 0% for $(agy_family_for_model "$model"). Not launching. $(agy_reset_note "$model")" >&2
+        # Covers both "the other account is empty too" and "there is no other
+        # account in the vault"; either way nothing can run this task now.
+        echo "ERROR: [$name] no Antigravity account has quota left for $(agy_family_for_model "$model"). Not launching. $(agy_reset_note "$model")" >&2
         continue
         ;;
       2)
@@ -87,6 +89,10 @@ for i in $(seq 0 $((n_tasks - 1))); do
         # agent rewrites it when its token refreshes. Switching now would change
         # that agent's account and lose the credential we swapped in.
         echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and the other account cannot be swapped in while agy is still running. Wait for the running agents to finish, then launch again. $(agy_reset_note "$model")" >&2
+        continue
+        ;;
+      4)
+        echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and HERDR_SWARM_NO_SWITCHING=1 forbids switching accounts. Not launching. $(agy_reset_note "$model")" >&2
         continue
         ;;
     esac
