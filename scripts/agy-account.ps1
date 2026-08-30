@@ -108,7 +108,19 @@ function Show([string]$label, [string]$target) {
   }
 }
 
-function Agy-Count { @(Get-Process -Name agy -ErrorAction SilentlyContinue).Count }
+# How many agy processes share this profile's credential store. Credential
+# Manager is per-Windows-user, so an agy running as a different user reads its
+# own vault and cannot be disturbed by a swap here - and GetOwner returning
+# anything but 0 means exactly that, since a process we may not even query is
+# not ours.
+function Agy-Count {
+  $me = $env:USERNAME
+  @(Get-CimInstance Win32_Process -Filter "Name='agy.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction SilentlyContinue
+      $o -and $o.ReturnValue -eq 0 -and $o.User -eq $me
+    }).Count
+}
 
 function Get-LiveAccount {
   if (Test-Path $STATE) { (Get-Content $STATE -Raw).Trim() } else { $null }
