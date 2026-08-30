@@ -21,7 +21,7 @@ base=$(jq -r '.base' <<<"$entry")
 kind=$(jq -r '.kind // "?"' <<<"$entry")
 model=$(jq -r '.model // ""' <<<"$entry")
 effort=$(jq -r '.effort // ""' <<<"$entry")
-fallback_from=$(jq -r '.fallback_from // ""' <<<"$entry")
+account=$(jq -r '.account // "a"' <<<"$entry")
 workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
 worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 
@@ -47,8 +47,8 @@ git -C "$worktree_path" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/
 
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
-if [[ -n "$fallback_from" ]]; then
-  echo "fallback:  ran on codex instead of $fallback_from, because the agy quota pool read 0% at launch"
+if [[ "$account" != "a" ]]; then
+  echo "account:   ${account^^} (the other Antigravity subscription; account A was at 0% at launch)"
 fi
 echo "branch:    $branch"
 echo "base:      $base (resolved: ${base_ref:0:12})"

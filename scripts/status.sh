@@ -19,16 +19,16 @@ for i in $(seq 0 $((n - 1))); do
   entry=$(jq -c ".[$i]" "$STATE_FILE")
   name=$(jq -r '.name' <<<"$entry")
   kind=$(jq -r '.kind // "?"' <<<"$entry")
-  fallback_from=$(jq -r '.fallback_from // ""' <<<"$entry")
+  account=$(jq -r '.account // "a"' <<<"$entry")
   status_file=$(jq -r '.status_file' <<<"$entry")
   workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
   worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 
-  # A trailing * marks a task that ran on codex because its agy quota pool read
-  # 0%, so the model that did the work is not the one tasks.json asked for.
-  [[ -n "$fallback_from" ]] && kind="${kind}*"
+  # Which Antigravity subscription did the work, since both look identical in
+  # the pane and only the credential in use told them apart.
+  [[ "$account" != "a" ]] && kind="${kind}@${account^^}"
 
-  herdr_state=$(agent_state "$name")
+  herdr_state=$(task_state "$name")
 
   if [[ -f "$status_file" ]]; then
     result=$(jq -r '.status // "unknown"' "$status_file" 2>/dev/null || echo "unparseable")
@@ -55,4 +55,4 @@ done
 
 echo
 echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes. Run scripts/review.sh <task> for those."
-echo "AGENT ending in * ran on codex because the agy quota pool was empty at launch."
+echo "AGENT ending in @B ran on the second Antigravity account, because account A was at 0% when it was launched."

@@ -66,23 +66,33 @@ for i in $(seq 0 $((n_tasks - 1))); do
 
   # Antigravity quota runs down per pool and can reach 0% mid-swarm. An agent
   # that cannot make a single call looks exactly like one still thinking, so
-  # check the quota first and route the task to codex instead.
-  fallback_from=""
-  if [[ "$kind" == "agy" && "${HERDR_SWARM_NO_FALLBACK:-0}" != "1" ]]; then
-    quota_rc=0
-    agy_exhausted "$model" || quota_rc=$?
-    case "$quota_rc" in
-      0)
-        echo "==> [$name] $(agy_family_for_model "$model") is at 0%. Running on codex $CODEX_FALLBACK_MODEL ($CODEX_FALLBACK_EFFORT) instead of agy ${model:-default}."
-        fallback_from="agy:${model:-default}"
-        kind="codex"
-        model="$CODEX_FALLBACK_MODEL"
-        effort="$CODEX_FALLBACK_EFFORT"
+  # check the quota first, and switch the live account when the current one has
+  # run dry. There is no codex fallback: when both accounts are empty the task
+  # is not launched at all.
+  account="a"
+  if [[ "$kind" == "agy" ]]; then
+    was_live=$(account_live || echo "a")
+    pick_rc=0
+    account=$(agy_pick_account "$model") || pick_rc=$?
+    case "$pick_rc" in
+      1)
+        echo "ERROR: [$name] both Antigravity accounts are at 0% for $(agy_family_for_model "$model"). Not launching. $(agy_reset_note "$model")" >&2
+        continue
         ;;
       2)
-        echo "WARN: [$name] could not read the agy quota, so the task stays on agy. Check it by hand with: MSYS_NO_PATHCONV=1 agy -p /usage" >&2
+        echo "WARN: [$name] could not read the agy quota, so the task runs on the account that is live now. Check it by hand with: MSYS_NO_PATHCONV=1 agy -p /usage" >&2
+        ;;
+      3)
+        # Every agy process on this profile shares one credential, and a running
+        # agent rewrites it when its token refreshes. Switching now would change
+        # that agent's account and lose the credential we swapped in.
+        echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and the other account cannot be swapped in while agy is still running. Wait for the running agents to finish, then launch again. $(agy_reset_note "$model")" >&2
+        continue
         ;;
     esac
+    if [[ "$account" != "$was_live" ]]; then
+      echo "==> [$name] account $was_live is at 0% for $(agy_family_for_model "$model"); switched the live credential to account $account."
+    fi
   fi
 
   model_args=()
@@ -138,7 +148,18 @@ for i in $(seq 0 $((n_tasks - 1))); do
     echo "WARN: [$name] could not resolve the worktree path. review.sh will have to ask herdr for it." >&2
   fi
 
-  echo "==> [$name] starting $kind agent in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
+  commit_note="Commit your changes as you go, with descriptive commit messages. Do not leave uncommitted changes at the end. Run 'git status' before finishing and commit or discard anything left over."
+
+  full_prompt="${prompt}
+
+${commit_note}
+
+When you are completely finished, write a JSON file to ${status_file} with the shape {\"status\": \"success\"|\"failure\", \"summary\": \"<short text>\", \"tests_passed\": true|false} as your very last action. Create parent directories if needed."
+
+  # Both accounts start the same way. Which subscription the agent draws on was
+  # decided above, by swapping the credential agy reads at start-up; nothing
+  # about the launch itself differs.
+  echo "==> [$name] starting $kind agent on account $account in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
   # One agent failing to start must not abandon the tasks after it, and it must
   # not leave an empty worktree behind either. Tear this one down and carry on.
   if ! herdr agent start "$name" --kind "$kind" --pane "$pane_id" --timeout "$timeout_ms" \
@@ -148,12 +169,6 @@ for i in $(seq 0 $((n_tasks - 1))); do
       || echo "WARN: [$name] could not remove workspace $workspace_id; clean it up by hand." >&2
     continue
   fi
-
-  full_prompt="${prompt}
-
-Commit your changes as you go, with descriptive commit messages. Do not leave uncommitted changes at the end. Run 'git status' before finishing and commit or discard anything left over.
-
-When you are completely finished, write a JSON file to ${status_file} with the shape {\"status\": \"success\"|\"failure\", \"summary\": \"<short text>\", \"tests_passed\": true|false} as your very last action. Create parent directories if needed."
 
   # `agent start` returns once the process exists, which is earlier than the TUI
   # accepting input. Prompting in that window loses the prompt without an error:
@@ -175,9 +190,9 @@ When you are completely finished, write a JSON file to ${status_file} with the s
         --arg base "${base:-HEAD}" --arg base_sha "$base_sha" \
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
-        --arg model "$model" --arg effort "$effort" --arg fallback_from "$fallback_from" \
+        --arg model "$model" --arg effort "$effort" --arg account "$account" \
     '{name: $name, kind: $kind, branch: $branch, base: $base, base_sha: $base_sha,
-      model: $model, effort: $effort, fallback_from: $fallback_from,
+      model: $model, effort: $effort, account: $account,
       pane_id: $pane_id, workspace_id: $workspace_id,
       worktree_path: $worktree_path, status_file: $status_file}' \
     >> "$entries_file"

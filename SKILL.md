@@ -1,6 +1,6 @@
 ---
 name: herdr-gemini-swarm
-description: Orchestrate parallel Gemini CLI / Antigravity CLI (agy) sub-agents through herdr. Writes a task config, launches each task as an auto-approving background agent on its own git worktree and branch, falls back to codex when the Antigravity quota is empty, then checks status, reads logs, and reviews the diff before it touches the user's branch. Use this when the user asks to run Gemini/Antigravity sub-agents, spin up a swarm of coding agents, or delegate parallel coding tasks through herdr.
+description: Orchestrate parallel Gemini CLI / Antigravity CLI (agy) sub-agents through herdr. Writes a task config, launches each task as an auto-approving background agent on its own git worktree and branch, routes work to a second Antigravity account when the first one's quota is empty, then checks status, reads logs, and reviews the diff before it touches the user's branch. Use this when the user asks to run Gemini/Antigravity sub-agents, spin up a swarm of coding agents, or delegate parallel coding tasks through herdr.
 ---
 
 # herdr Gemini/Antigravity swarm
@@ -8,8 +8,9 @@ description: Orchestrate parallel Gemini CLI / Antigravity CLI (agy) sub-agents 
 Runs one or more `gemini` / `agy` (Antigravity CLI) instances as background agents
 inside `herdr` panes, each on its own git worktree and branch, with auto-approve
 enabled. Gives you a way to check on them, read their output, and review their
-diff before anything lands on the user's branch. When the Antigravity quota is
-gone, tasks run on `codex` instead.
+diff before anything lands on the user's branch. When the user's main Antigravity
+quota is gone, tasks run on a second Antigravity account instead; when that one
+is empty too, they are not launched at all.
 
 ## 0. Precondition: must run inside herdr
 
@@ -28,10 +29,10 @@ launch a new herdr server or fake this check.
 |----------|----------|----------------------------------------------|-------|
 | `gemini` | `gemini` | `--yolo` (or `--approval-mode yolo`)         | Classic Gemini CLI. Google sunset this for Free/Pro/Ultra users on 2026-06-18 in favor of Antigravity CLI, so it may not be installed on the user's machine anymore. Check with `command -v gemini` before assuming it exists. |
 | `agy`    | `agy`    | `--dangerously-skip-permissions`             | Antigravity CLI, the successor. This is the flag name Google ships. Treat it as seriously as it sounds. |
-| `codex`  | `codex`  | `--dangerously-bypass-approvals-and-sandbox` | OpenAI Codex CLI. Used as the fallback when the Antigravity quota hits 0%, see section 3. You can also ask for it directly. |
+| `codex`  | `codex`  | `--dangerously-bypass-approvals-and-sandbox` | OpenAI Codex CLI. Only used when the user asks for it by name. It is **not** a fallback for an empty Antigravity quota, see section 3. |
 
 All three are valid `--kind` values for `herdr agent start`, so no manual pane
-fallback is needed. If the user says "Gemini" but only `agy` is installed, ask
+handling is needed. If the user says "Gemini" but only `agy` is installed, ask
 once which they mean rather than silently swapping binaries.
 
 ## 2. Pick a model for each task
@@ -68,7 +69,7 @@ Routing heuristic when generating `tasks.json`:
 
 If the user names a model outright, use it and skip the heuristic.
 
-## 3. The codex fallback when the Antigravity quota runs out
+## 3. Two Antigravity accounts, and what happens when both run dry
 
 Antigravity meters two quota pools separately, and each has a weekly and a
 five-hour window:
@@ -78,20 +79,30 @@ five-hour window:
 
 An agent launched against an empty pool cannot make a single call, and in herdr
 that looks the same as an agent still thinking. So `launch.sh` reads the quota
-before it starts anything and routes affected tasks to `codex` running
-`gpt-5.6-luna` at `xhigh` reasoning effort.
+before it starts anything and picks the account that still has room.
 
 The rules it applies:
 
 - Only the pool a task's model draws from matters. If Gemini sits at 0% and
-  Claude/GPT at 82%, the `gemini-3.1-pro-high` tasks move to codex and the
-  `claude-opus-4-6-thinking` tasks stay on agy.
+  Claude/GPT at 82%, the `gemini-3.1-pro-high` tasks move to the other account
+  and the `claude-opus-4-6-thinking` tasks stay on the live one.
 - Either window counts. 0% on the five-hour limit blocks the task right now even
-  when the weekly limit still has room, so it triggers the fallback.
+  when the weekly limit still has room.
 - A task with no `model` set runs on whatever agy defaults to, which the CLI does
-  not report, so an empty pool on either side triggers the fallback.
-- If the quota cannot be read at all, the task stays on agy and `launch.sh`
-  prints a warning. It does not guess.
+  not report, so an empty pool on either side counts as empty.
+- Only the live account's quota can be read, because `/usage` answers for
+  whoever `agy` is signed in as. The other account is consulted only once the
+  live one reads 0%, since asking means swapping the credential first.
+- **A switch is refused while any `agy` process is running.** Every agent on this
+  profile shares one credential, so a swap would change a running agent's account
+  and lose the credential swapped in. `launch.sh` then launches nothing and says
+  to wait for the running agents to finish. Report that; do not force it.
+- **When both accounts are empty the task is not launched at all.** `launch.sh`
+  prints when each account refills and moves on to the next task. There is no
+  codex fallback: report the stop and the reset time to the user, and do not
+  route the work to another model unless they ask you to.
+- If the quota cannot be read at all, the task stays on the live account and
+  `launch.sh` prints a warning. It does not guess.
 
 Reading the quota is the fiddly part. There is no `agy usage` subcommand, and
 `/usage` only expands in print mode:
@@ -113,25 +124,56 @@ as an ordinary prompt about a file path. The call then burns a model turn and
 returns prose instead of numbers, so every quota check silently reads as "cannot
 tell". The same trap applies to any other slash command you script.
 
-Codex takes its reasoning depth through config rather than a flag, so the
-fallback launches as:
+### How the second account works
+
+`agy` has no `--profile` or `--account` flag. Its OAuth token lives in Windows
+Credential Manager under one fixed target, `gemini:antigravity`, per Windows
+user. Environment variables cannot separate two subscriptions.
+
+`scripts/agy-account.ps1` keeps a vault instead: one extra credential entry per
+account (`herdr-swarm:agy-a`, `herdr-swarm:agy-b`) plus the live target that
+`agy` actually reads. Switching accounts means copying a vault entry over the
+live one before an agent starts. Both accounts then run as the user, in an
+ordinary herdr pane with a full TUI, and nothing about the launch differs
+between them.
 
 ```
-codex --dangerously-bypass-approvals-and-sandbox --model gpt-5.6-luna -c model_reasoning_effort="xhigh"
+list                what is in the vault, and which account is live
+save -Account a|b   copy the live credential into the vault
+use  -Account a|b   sync the outgoing account, then make a|b live
+sync                copy the live credential back over its own vault entry
 ```
 
-`gpt-5.6-luna` accepts `low`, `medium`, `high`, `xhigh` and `max`. Override the
-defaults with environment variables:
+Setup is one-time and the user does it: run `agy`, `/logout`, `/login` as the
+second subscription, `save -Account b`; then `/logout`, `/login` as the main one,
+`save -Account a`. If both vault entries are empty, or `pwsh` is not installed,
+there is no second account and the swarm stops when the live one empties.
 
-- `HERDR_SWARM_NO_FALLBACK=1` skips the quota check and keeps every task on agy.
-- `HERDR_SWARM_CODEX_MODEL` and `HERDR_SWARM_CODEX_EFFORT` change what the
-  fallback runs.
+The script never prints a credential. It prints a 12-character SHA-256 prefix
+with the blob size and write time, which distinguishes two accounts and is
+useless to anyone else. Keep it that way if you touch it.
 
-A task that fell back is recorded in `state.json` as `fallback_from`, shows up in
-`status.sh` with a `*` after the agent name, and is called out by `review.sh`.
-Say so when you report results. The diff came from a different model than the one
-the user asked for, which matters when they picked `claude-opus-4-6-thinking` for
-a reason.
+Two consequences to keep in mind:
+
+- **`agy` refreshes its token mid-session and writes it back to the live
+  target.** Measured: with twelve sessions running, the entry was rewritten twice
+  inside thirty seconds. So accounts cannot be mixed while agents are alive, and
+  `use` refuses to swap in that case. It also means a vault entry is stale as
+  soon as its account has done work, so `use` syncs the live credential back into
+  the outgoing account's entry first.
+- **Which account is live is a state file**, `%LOCALAPPDATA%\herdr-swarm\live-account`.
+  After a refresh the live blob matches no vault entry, so nothing else knows.
+  If that file is missing, `use` refuses rather than silently losing a token; the
+  fix is `save -Account <whoever is signed in>`.
+
+A task's account is recorded in `state.json` as `account`, shows up in
+`status.sh` as `agy@B`, and is called out by `review.sh`. Both accounts run the
+model the user asked for, so this changes who paid for the work, not what did it.
+
+Environment override:
+
+- `HERDR_SWARM_NO_SWITCHING=1` never switches accounts; the swarm stops when the
+  live one is empty.
 
 ## 4. Git workflow: always branch and worktree, review before merge
 
@@ -245,10 +287,13 @@ scripts/launch.sh tasks.json
 
 For each task this:
 
-1. Reads the Antigravity quota once and decides whether the task runs on agy or
-   falls back to codex, per section 3.
+1. Reads the Antigravity quota once and picks the account for the task, swapping
+   the live credential if the other account is needed, or skips the task entirely
+   when both accounts are empty or a swap is impossible, per section 3.
 2. Runs `herdr worktree create --cwd <repo> --branch <branch> [--base <base>] --label <name> --no-focus`.
 3. Runs `herdr agent start <name> --kind <kind> --pane <pane_id> -- <auto-approve-flag> [model flags] <args...>`.
+   Both accounts start identically: the account was already decided in step 1, by
+   swapping the credential `agy` reads at start-up.
 4. Waits for `interactive_ready`, then runs `herdr agent prompt <name> "<prompt
    plus status-file and commit-discipline instructions>"` **without** `--wait`, so
    tasks run in parallel, and confirms the agent reacted.
@@ -260,8 +305,9 @@ For each task this:
    task waiting for review. So `launch.sh` compares `state_change_seq` before and
    after submitting, and resends once if nothing moved. **Never send a prompt with
    its output redirected to `/dev/null`.**
-5. Records `{name, kind, model, effort, fallback_from, branch, base, pane_id,
-   workspace_id, worktree_path, status_file}` into `.herdr-swarm/state.json`.
+5. Records `{name, kind, model, effort, account, branch, base, base_sha, pane_id,
+   workspace_id, worktree_path, status_file}` into
+   `.herdr-swarm/state.json`.
 
 Launching confirms that the agent started and accepted the prompt. It confirms
 nothing about the work.
@@ -276,8 +322,9 @@ For every task this prints the herdr lifecycle state from `herdr agent get <name
 which agent kind actually ran, whether `status_file` exists and what it says, and
 whether the worktree is clean per `git status --porcelain`. A task is
 review-ready only when **all three** line up: herdr `idle` or `done`,
-`status: success`, and a clean tree. An agent name ending in `*` fell back to
-codex.
+`status: success`, and a clean tree. An agent name ending in `@B` ran on the
+second Antigravity account, because the first was at 0% when it was launched.
+Both are ordinary herdr agents, so the state comes from herdr either way.
 
 `blocked` means something needs a human despite auto-approve. Read its logs and
 decide, rather than looping retries.
@@ -295,7 +342,7 @@ For each review-ready task:
 scripts/review.sh <task-name>
 ```
 
-This prints which model produced the work, whether it fell back to codex, the
+This prints which model produced the work, which account ran it, the
 commit log and diffstat for `<branch>` against its base, and the worktree path.
 Read the actual diff with `git -C <worktree_path> diff <base>...` before deciding.
 This is the human-in-the-loop step even though Claude is running it, and it is
@@ -311,7 +358,8 @@ scripts/logs.sh <task-name> [lines]
 
 This wraps `herdr agent read <name> --source recent-unwrapped --lines <N>`,
 defaulting to 150. Use `recent-unwrapped` rather than `visible`, because it is not
-limited to the current terminal viewport.
+limited to the current terminal viewport. The account a task ran on makes no
+difference here.
 
 ## Safety notes to apply, not just mention
 
@@ -328,8 +376,14 @@ limited to the current terminal viewport.
 - The review step in section 8 is not ceremony. It is the only thing between an
   auto-approving agent and the user's branch. Do not skip it because a status file
   says success.
-- Report when a task fell back to codex. The user picked a model for a reason, and
-  a security review done by `gpt-5.6-luna` instead of `claude-opus-4-6-thinking`
-  is a different piece of work.
+- Switching accounts moves an OAuth credential between entries in the user's own
+  Windows Credential Manager. Never print a credential blob, never copy one out
+  of the vault to anywhere else, and never pass `-Force` to
+  `agy-account.ps1 -Mode use` to get around the "agents are running" refusal:
+  that silently changes the account of a running agent and loses a token.
+- Report when a task never launched, whether because both accounts were empty or
+  because a switch was needed while agents were still running. A missing task
+  is easy to miss in a status table, and the user may want to wait for the reset
+  rather than run the work somewhere else.
 - If `status.sh` shows `blocked` for longer than expected, a human is needed. That
   is not a reason to add more auto-approve flags.
