@@ -88,7 +88,7 @@ for i in $(seq 0 $((n_tasks - 1))); do
         # Every agy process on this profile shares one credential, and a running
         # agent rewrites it when its token refreshes. Switching now would change
         # that agent's account and lose the credential we swapped in.
-        echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and the other account cannot be swapped in while agy is still running. Wait for the running agents to finish, then launch again. $(agy_reset_note "$model")" >&2
+        echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and the other account cannot be swapped in while agy is still running. Agents that already finished still hold the credential until their pane is closed: run scripts/cleanup.sh, then launch again. $(agy_reset_note "$model")" >&2
         continue
         ;;
       4)
@@ -192,12 +192,12 @@ When you are completely finished, write a JSON file to ${status_file} with the s
   submit_prompt "$name" "$full_prompt" || echo "ERROR: [$name] prompt was not picked up; resend it by hand." >&2
 
   # An unset base is an empty string, not null, so `// "HEAD"` would not catch it.
-  jq -n --arg name "$name" --arg kind "$kind" --arg branch "$branch" \
+  jq -n --arg name "$name" --arg kind "$kind" --arg repo "$repo" --arg branch "$branch" \
         --arg base "${base:-HEAD}" --arg base_sha "$base_sha" \
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
         --arg model "$model" --arg effort "$effort" --arg account "$account" \
-    '{name: $name, kind: $kind, branch: $branch, base: $base, base_sha: $base_sha,
+    '{name: $name, kind: $kind, repo: $repo, branch: $branch, base: $base, base_sha: $base_sha,
       model: $model, effort: $effort, account: $account,
       pane_id: $pane_id, workspace_id: $workspace_id,
       worktree_path: $worktree_path, status_file: $status_file}' \

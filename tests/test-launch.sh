@@ -111,6 +111,10 @@ grepok "starts the agent"                 "starting agy agent on account a" "$ou
 grepok "sends the prompt"                 "sending prompt"                  "$out"
 check  "state.json records account a" "a" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
 check  "state.json records the branch" "agent/t1" "$(jq -r '.[0].branch' "$LAST_STATE_DIR/state.json")"
+# cleanup.sh needs the origin repo to tell whether a task branch was merged.
+# jq is a native binary, so MSYS rewrites a /tmp/... argument into its Windows
+# form on the way in; compare against the same form rather than the POSIX one.
+check  "state.json records the repo" "$(cygpath -m "$SRC" 2>/dev/null || echo "$SRC")" "$(jq -r '.[0].repo' "$LAST_STATE_DIR/state.json")"
 check  "no dead state_file field" "null" "$(jq -r '.[0].state_file' "$LAST_STATE_DIR/state.json")"
 grepok "worktree was created"             "worktree create"                 "$(cat "$HERDR_CALL_LOG")"
 grepok "agent started through herdr"      "agent start t1"                  "$(cat "$HERDR_CALL_LOG")"
@@ -129,7 +133,7 @@ echo "== 3. switch refused because agents are running: nothing starts =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(FAKE_GEM_5H_A=0 FAKE_VAULT_B=full FAKE_SWITCH_RC=3 run_launch)
 grepok "explains why it stopped"          "cannot be swapped in while agy is still running" "$out"
-grepok "tells the user to wait"           "Wait for the running agents to finish"           "$out"
+grepok "points at cleanup.sh"             "run scripts/cleanup.sh, then launch again"       "$out"
 grepok "reports the reset time"           "refills at 2026-08-30T18:31:35Z"                 "$out"
 check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
 check  "no worktree was created" "" "$(grep 'worktree create' "$HERDR_CALL_LOG" || true)"

@@ -54,6 +54,25 @@ submit_prompt() {
   return 1
 }
 
+# Close an agent's TUI and wait until herdr no longer knows it.
+# herdr has no `agent stop`, so the only way out of an agy session is the
+# interrupt the TUI itself listens for. Two details are load-bearing: the key
+# name is "ctrl+c" ("ctrl-c" comes back as "unsupported key"), and both presses
+# must go in one send-keys call. Sent as two calls with a sleep between them the
+# second is mostly swallowed and the pane stays open (measured on 12 panes: 12
+# -> 11 -> 10 over several rounds). Returns non-zero if the agent is still there
+# after $2 seconds.
+agent_close() {
+  local name="$1" tries="${2:-15}"
+  [[ "$(agent_state "$name")" == "unreachable" ]] && return 0
+  herdr agent send-keys "$name" "ctrl+c" "ctrl+c" >/dev/null 2>&1 || true
+  for _ in $(seq 1 "$tries"); do
+    [[ "$(agent_state "$name")" == "unreachable" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
 # Checkout path of a workspace's worktree, with backslashes normalised so that
 # `git -C` takes it on Windows.
 worktree_path_of() {

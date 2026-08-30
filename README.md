@@ -82,6 +82,15 @@ scripts/review.sh <task-name>
 scripts/logs.sh <task-name> [lines]
 ```
 
+**6. Close the agents** when you are done with them. A finished agy agent does
+not exit on its own; it sits in its pane still holding the shared Antigravity
+credential, which blocks the next account switch:
+
+```bash
+scripts/cleanup.sh                 # close agents that reported a result
+scripts/cleanup.sh --worktrees     # and remove a worktree once its branch is merged
+```
+
 State lives in `.herdr-swarm/state.json`. Override the location with
 `HERDR_SWARM_STATE_DIR`.
 

@@ -221,10 +221,9 @@ Pipeline, in order:
    branch the user is actively working on, so it gets the same explicit
    confirmation as any other side-effectful action, even though git makes it
    reversible.
-7. **Clean up after the decision** with `herdr worktree remove --workspace <id>`,
-   adding `--force` only if the user chose to discard a dirty checkout. This
-   removes the checkout, never the branch. Delete the branch separately if the
-   user wants it gone too.
+7. **Clean up after the decision** with `scripts/cleanup.sh --worktrees`, per
+   section 9. It closes the agent and removes the checkout, never the branch.
+   Delete the branch separately if the user wants it gone too.
 
 ## 5. Write the task config
 
@@ -305,8 +304,8 @@ For each task this:
    task waiting for review. So `launch.sh` compares `state_change_seq` before and
    after submitting, and resends once if nothing moved. **Never send a prompt with
    its output redirected to `/dev/null`.**
-5. Records `{name, kind, model, effort, account, branch, base, base_sha, pane_id,
-   workspace_id, worktree_path, status_file}` into
+5. Records `{name, kind, repo, model, effort, account, branch, base, base_sha,
+   pane_id, workspace_id, worktree_path, status_file}` into
    `.herdr-swarm/state.json`.
 
 Launching confirms that the agent started and accepted the prompt. It confirms
@@ -350,7 +349,37 @@ what makes auto-approve acceptable in the first place. Then follow section 4
 steps 5 to 7: fix by re-prompting if needed, at most twice, present the result and
 ask the user how to merge, and clean up the worktree once they decide.
 
-## 9. Read logs
+## 9. Close the agents
+
+```bash
+scripts/cleanup.sh                          # agents that reported a result
+scripts/cleanup.sh --all                    # working ones too, interrupting them
+scripts/cleanup.sh --worktrees [--force]    # also remove their workspace
+scripts/cleanup.sh --dry-run                # say what it would do
+```
+
+An agy agent that finished its task does not exit. It stays in its pane as an
+idle process still holding the shared OAuth credential, so the next launch that
+needs the other account is refused with "accounts cannot be mixed" - true, but it
+reads like a quota problem rather than "your last swarm is still open". Closing
+agents is part of the run, not tidying up afterwards, so do it as soon as the
+user has the review in hand.
+
+By default this only closes agents that wrote a result file or that herdr calls
+`done`. An `idle` agent with no result file is left alone on purpose: that is what
+a dropped prompt looks like, and closing it would throw away a task nobody has
+looked at. `--worktrees` additionally removes the herdr workspace, but only when
+the worktree is clean and the branch is already merged into its base, since
+removing it otherwise destroys the work. `--force` overrides both checks; only
+use it once the user has said the branch can go.
+
+herdr has no `agent stop`, so `cleanup.sh` sends the TUI's own interrupt. Two
+details are load-bearing and easy to get wrong by hand: the key name is `ctrl+c`
+(`ctrl-c` comes back as `unsupported key`), and both presses must go in a single
+`herdr agent send-keys <name> ctrl+c ctrl+c` call. Sent as two calls with a sleep
+between them, the second is mostly swallowed and the pane stays open.
+
+## 10. Read logs
 
 ```bash
 scripts/logs.sh <task-name> [lines]
