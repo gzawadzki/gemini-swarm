@@ -25,15 +25,6 @@ mkdir -p "$STATE_DIR"
 entries_file="$STATE_DIR/.entries.jsonl"
 : > "$entries_file"
 
-autoflag_for_kind() {
-  case "$1" in
-    gemini) echo "--yolo" ;;
-    agy)    echo "--dangerously-skip-permissions" ;;
-    codex)  echo "--dangerously-bypass-approvals-and-sandbox" ;;
-    *)      echo "ERROR: unsupported kind '$1' (expected 'gemini', 'agy' or 'codex')" >&2; exit 1 ;;
-  esac
-}
-
 n_tasks=$(jq '.tasks | length' "$TASKS_FILE")
 echo "Launching $n_tasks task(s) from $TASKS_FILE"
 
@@ -48,6 +39,7 @@ for i in $(seq 0 $((n_tasks - 1))); do
   model=$(jq -r '.model // empty' <<<"$task")
   effort=$(jq -r '.effort // empty' <<<"$task")
   timeout_ms=$(jq -r '.timeout_ms // 30000' <<<"$task")
+  verify=$(jq -r '.verify // empty' <<<"$task")
   mapfile -t extra_args < <(jq -r '.args // [] | .[]' <<<"$task")
 
   if ! [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; then
@@ -108,7 +100,8 @@ for i in $(seq 0 $((n_tasks - 1))); do
       ;;
   esac
 
-  autoflag=$(autoflag_for_kind "$kind")
+  autoflag=$(autoflag_for_kind "$kind") \
+    || { echo "ERROR: [$name] unsupported kind, skipping." >&2; continue; }
   # The agent is a native Windows binary under Git Bash, and it does not resolve
   # MSYS paths the way bash does: it reads /tmp as C:\tmp, so a result file it
   # writes there is invisible to status.sh. Hand it a path its own OS agrees with.
@@ -176,10 +169,12 @@ When you are completely finished, write a JSON file to ${status_file} with the s
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
         --arg model "$model" --arg effort "$effort" --arg fallback_from "$fallback_from" \
+        --arg verify "$verify" --arg prompt "$prompt" \
     '{name: $name, kind: $kind, branch: $branch, base: $base, base_sha: $base_sha,
       model: $model, effort: $effort, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
-      worktree_path: $worktree_path, status_file: $status_file}' \
+      worktree_path: $worktree_path, status_file: $status_file, verify: $verify,
+      prompt: $prompt}' \
     >> "$entries_file"
 done
 

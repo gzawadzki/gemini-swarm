@@ -12,7 +12,12 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required." >&2; exit 1; }
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-printf '%-20s %-8s %-10s %-10s %-8s %-6s %s\n' "TASK" "AGENT" "HERDR" "RESULT" "TESTS" "CLEAN" "SUMMARY"
+printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
+  "TASK" "AGENT" "HERDR" "RESULT" "TESTS" "CLEAN" "VERIFY" "CRITIQUE" "SUMMARY"
+
+# NEXT block: one prescriptive command per task, so a status read collapses into
+# the next action instead of another round of Claude figuring out what to do.
+next_lines=()
 
 n=$(jq 'length' "$STATE_FILE")
 for i in $(seq 0 $((n - 1))); do
@@ -50,9 +55,58 @@ for i in $(seq 0 $((n - 1))); do
     clean="n/a"
   fi
 
-  printf '%-20s %-8s %-10s %-10s %-8s %-6s %s\n' "$name" "$kind" "$herdr_state" "$result" "$tests" "$clean" "$summary"
+  # VERIFY is whatever verify.sh last cached; "-" means it has not run yet. This
+  # stays a zero-cost read: status.sh never runs the check itself.
+  verify_file=$(verify_file_for "$name")
+  if [[ -f "$verify_file" ]]; then
+    verify=$(jq -r '.status // "?"' "$verify_file" 2>/dev/null || echo "?")
+  else
+    verify="-"
+  fi
+
+  # Same deal for CRITIQUE: cached by critique.sh, never computed here. No agent
+  # is spawned by a status read.
+  critique_file=$(critique_file_for "$name")
+  if [[ -f "$critique_file" ]]; then
+    critique=$(jq -r '.verdict // "?"' "$critique_file" 2>/dev/null || echo "?")
+  else
+    critique="-"
+  fi
+
+  printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
+    "$name" "$kind" "$herdr_state" "$result" "$tests" "$clean" "$verify" "$critique" "$summary"
+
+  # Decide the single next command for this task.
+  if [[ "$herdr_state" == "blocked" ]]; then
+    next_lines+=("$name: blocked, needs a human -> scripts/logs.sh $name")
+  elif [[ "$herdr_state" == "unreachable" ]]; then
+    next_lines+=("$name: herdr can't see this agent -> herdr agent list (do not relaunch blindly)")
+  elif [[ "$result" == "failure" ]]; then
+    next_lines+=("$name: agent reported failure -> scripts/logs.sh $name")
+  elif [[ "$herdr_state" != "idle" && "$herdr_state" != "done" ]]; then
+    next_lines+=("$name: still running -> scripts/logs.sh $name")
+  elif [[ "$result" != "success" || "$clean" != "yes" ]]; then
+    next_lines+=("$name: not review-ready (result=$result clean=$clean) -> scripts/logs.sh $name")
+  elif [[ "$verify" == "-" ]]; then
+    next_lines+=("$name: ready to verify -> scripts/verify.sh $name")
+  elif [[ "$verify" == "fail" ]]; then
+    next_lines+=("$name: verify failed -> scripts/logs.sh $name, then re-prompt the agent")
+  elif [[ "$critique" == "-" ]]; then
+    # Tests pass. Spend a cheap model on the diff before spending your own read.
+    next_lines+=("$name: verify $verify, ready to critique -> scripts/critique.sh $name")
+  elif [[ "$critique" == "revise" || "$critique" == "reject" ]]; then
+    next_lines+=("$name: critique says $critique -> scripts/review.sh $name for the issues, then re-prompt the agent")
+  else
+    # Both halves of the gate are behind it: pass, skipped, or the critique
+    # itself failed to produce an answer. Either way the next step is your read.
+    next_lines+=("$name: verify $verify / critique $critique -> scripts/review.sh $name")
+  fi
 done
 
 echo
-echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes. Run scripts/review.sh <task> for those."
+echo "NEXT:"
+for line in "${next_lines[@]}"; do echo "  $line"; done
+echo
+echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes + VERIFY pass/skipped"
+echo "               + CRITIQUE run. Both gates filter; neither one approves."
 echo "AGENT ending in * ran on codex because the agy quota pool was empty at launch."
