@@ -44,6 +44,7 @@ writes the config and drives the scripts. To do it manually:
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest and report the result.",
       "args": [],
+      "verify": "pytest -q tests/test_auth.py",
       "timeout_ms": 900000
     }
   ]
@@ -52,7 +53,15 @@ writes the config and drives the scripts. To do it manually:
 
 Run `agy models` to see the live model list. Most slugs bake the reasoning effort
 into the name, so `gemini-3.1-pro-high` and `gemini-3.1-pro-low` are separate
-models.
+models. By default the swarm routes tasks to Gemini models (the large, cheap
+Antigravity pool) and reserves `claude-*`/`gpt-*` slugs for when you name them
+explicitly — the idea is that Claude does the orchestration and review while the
+swarm does volume.
+
+The optional `verify` field is a shell command run inside the worktree as an
+egress gate before the diff is reviewed (see step 4). Omit it and the tooling
+auto-detects one from the project (`npm`/`yarn`/`pnpm test`, `pytest`,
+`cargo test`, `go test`, a `test:` Make target).
 
 **2. Launch.** This creates a worktree and branch per task and starts the agents
 in parallel:
@@ -68,13 +77,21 @@ scripts/launch.sh tasks.json
 scripts/status.sh
 ```
 
-**4. Review the diff** before merging anything:
+**4. Verify** — run the egress gate in the worktree before reading anything. It
+runs the task's `verify` command (or an auto-detected one), so mechanical
+failures never reach the review:
+
+```bash
+scripts/verify.sh <task-name>
+```
+
+**5. Review the diff** before merging anything, for tasks the gate cleared:
 
 ```bash
 scripts/review.sh <task-name>
 ```
 
-**5. Read an agent's output** when something looks wrong:
+**6. Read an agent's output** when something looks wrong:
 
 ```bash
 scripts/logs.sh <task-name> [lines]

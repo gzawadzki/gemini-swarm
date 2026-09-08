@@ -144,3 +144,53 @@ agy_exhausted() {
 # Model and effort the fallback runs on.
 CODEX_FALLBACK_MODEL="${HERDR_SWARM_CODEX_MODEL:-gpt-5.6-luna}"
 CODEX_FALLBACK_EFFORT="${HERDR_SWARM_CODEX_EFFORT:-xhigh}"
+
+# --- Egress verification gate -----------------------------------------------
+#
+# The review step is the only thing between an auto-approving agent and the
+# user's branch, and it costs Claude a full read of every diff. Most of what it
+# would catch is mechanical: a task that broke the build or failed its own tests
+# should never reach that read. verify.sh runs a deterministic check inside the
+# worktree first, so Claude only spends attention on diffs that already pass.
+#
+# The check command comes from, in order: the task's own `verify` field, then a
+# cheap auto-detection from the worktree's project files. A repo with no
+# recognisable test command yields nothing, and the gate reports "skipped"
+# rather than failing, so an unknown stack never blocks review outright.
+
+# Path where verify.sh caches a task's result, read back by status.sh.
+verify_file_for() {
+  printf '%s/%s.verify.json' "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}" "$1"
+}
+
+# Guess a test/build command from the files in a worktree. Prints nothing when
+# it recognises no stack, which the caller treats as "skip", not "fail".
+detect_verify_cmd() {
+  local wt="$1"
+  if [[ -f "$wt/package.json" ]]; then
+    # Only claim a test command if the project actually defines one.
+    if jq -e '.scripts.test // empty' "$wt/package.json" >/dev/null 2>&1; then
+      if   [[ -f "$wt/pnpm-lock.yaml" ]]; then echo "pnpm test"
+      elif [[ -f "$wt/yarn.lock" ]];      then echo "yarn test"
+      else echo "npm test --silent"; fi
+      return
+    fi
+  fi
+  if [[ -f "$wt/pyproject.toml" || -f "$wt/pytest.ini" || -f "$wt/setup.cfg" || -d "$wt/tests" ]]; then
+    echo "pytest -q"; return
+  fi
+  if [[ -f "$wt/Cargo.toml" ]];  then echo "cargo test --quiet"; return; fi
+  if [[ -f "$wt/go.mod" ]];      then echo "go test ./..."; return; fi
+  if [[ -f "$wt/Makefile" ]] && grep -qE '^test:' "$wt/Makefile" 2>/dev/null; then
+    echo "make test"; return
+  fi
+}
+
+# The verify command for a task: its explicit `verify` field, else detection.
+resolve_verify_cmd() {
+  local from_task="$1" worktree="$2"
+  if [[ -n "$from_task" && "$from_task" != "null" ]]; then
+    printf '%s' "$from_task"; return
+  fi
+  [[ -n "$worktree" && -d "$worktree" ]] && detect_verify_cmd "$worktree"
+}

@@ -48,6 +48,7 @@ for i in $(seq 0 $((n_tasks - 1))); do
   model=$(jq -r '.model // empty' <<<"$task")
   effort=$(jq -r '.effort // empty' <<<"$task")
   timeout_ms=$(jq -r '.timeout_ms // 30000' <<<"$task")
+  verify=$(jq -r '.verify // empty' <<<"$task")
   mapfile -t extra_args < <(jq -r '.args // [] | .[]' <<<"$task")
 
   if ! [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; then
@@ -176,10 +177,11 @@ When you are completely finished, write a JSON file to ${status_file} with the s
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
         --arg model "$model" --arg effort "$effort" --arg fallback_from "$fallback_from" \
+        --arg verify "$verify" \
     '{name: $name, kind: $kind, branch: $branch, base: $base, base_sha: $base_sha,
       model: $model, effort: $effort, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
-      worktree_path: $worktree_path, status_file: $status_file}' \
+      worktree_path: $worktree_path, status_file: $status_file, verify: $verify}' \
     >> "$entries_file"
 done
 

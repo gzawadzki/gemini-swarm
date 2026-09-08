@@ -45,10 +45,24 @@ fi
 git -C "$worktree_path" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null \
   || { echo "ERROR: base '$base_ref' is not a commit in $worktree_path." >&2; exit 1; }
 
+verify_file=$(verify_file_for "$NAME")
+verify_status="not run"
+verify_cmd=""
+if [[ -f "$verify_file" ]]; then
+  verify_status=$(jq -r '.status // "?"' "$verify_file" 2>/dev/null || echo "?")
+  verify_cmd=$(jq -r '.cmd // ""' "$verify_file" 2>/dev/null || echo "")
+fi
+
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
 if [[ -n "$fallback_from" ]]; then
   echo "fallback:  ran on codex instead of $fallback_from, because the agy quota pool read 0% at launch"
+fi
+echo "verify:    $verify_status${verify_cmd:+ ($verify_cmd)}"
+if [[ "$verify_status" == "not run" ]]; then
+  echo "           run scripts/verify.sh $NAME first; do not merge on an unverified diff you have not read"
+elif [[ "$verify_status" == "fail" ]]; then
+  echo "           verify FAILED; re-prompt the agent before reviewing further"
 fi
 echo "branch:    $branch"
 echo "base:      $base (resolved: ${base_ref:0:12})"
