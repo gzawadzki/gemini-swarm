@@ -1,6 +1,6 @@
 ---
 name: herdr-gemini-swarm
-description: Orchestrate parallel Gemini CLI / Antigravity CLI (agy) sub-agents through herdr. Writes a task config, launches each task as an auto-approving background agent on its own git worktree and branch, falls back to codex when the Antigravity quota is empty, then checks status, reads logs, runs a two-stage egress gate (tests plus a cheap-model critique of the diff), and reviews the diff before it touches the user's branch. Use this when the user asks to run Gemini/Antigravity sub-agents, spin up a swarm of coding agents, or delegate parallel coding tasks through herdr.
+description: Orchestrate parallel Gemini CLI / Antigravity CLI (agy) sub-agents through herdr. Writes a task config, launches each task as an auto-approving background agent on its own git worktree and branch, falls back to codex when the Antigravity quota is empty, then checks status, reads logs, runs a two-stage egress gate (tests plus a cheap-model critique of the diff), reviews the diff before it touches the user's branch, and cleans up task workspaces, worktrees, branches and scratch state once the result is integrated or discarded. Use this when the user asks to run Gemini/Antigravity sub-agents, spin up a swarm of coding agents, or delegate parallel coding tasks through herdr.
 ---
 
 # herdr Gemini/Antigravity swarm
@@ -235,10 +235,29 @@ Pipeline, in order:
    discard. This changes the branch the user is actively working on, so it gets
    the same explicit confirmation as any other side-effectful action, even though
    git makes it reversible.
-9. **Clean up after the decision** with `herdr worktree remove --workspace <id>`,
-   adding `--force` only if the user chose to discard a dirty checkout. This
-   removes the checkout, never the branch. Delete the branch separately if the
-   user wants it gone too.
+9. **Clean up before reporting completion.** Once the reviewed result is
+   integrated, preserved on another ref, or explicitly discarded, cleanup is part
+   of the task rather than an optional follow-up:
+   - Confirm the task worktree is clean, then remove it with
+     `herdr worktree remove --workspace <id>`; add `--force` only when the user
+     explicitly chose to discard a dirty checkout. Close any duplicate or
+     orphaned workspace created for the same task. This removes the checkout,
+     never the branch.
+   - Delete `agent/<name>` only after confirming its desired commits are present
+     on the user's branch, a PR ref, or a deliberate backup — or after the user
+     chose to discard them. The branch is the only copy of that work.
+   - Remove that task's entry, result file, logs and gate artifacts from
+     `.herdr-swarm` (`<name>.result.json`, `<name>.verify.json`,
+     `<name>.verify.log`, `<name>.critique.json`, `<name>.critique.brief.md`,
+     `<name>.critique.reply.txt`). Remove the directory only when no active task
+     still uses it; preserve shared state for workers that are still running.
+   - Verify the cleanup: the task is absent from `herdr workspace list`, its path
+     is absent from `git worktree list`, its disposable branch is absent from
+     `git branch --list 'agent/<name>'`, and the user's pre-existing
+     working-tree changes are unchanged.
+
+   A swarm task is not complete until that verification passes. Report anything
+   intentionally retained, such as a backup branch, and why it remains.
 
 ## 5. Write the task config
 
@@ -436,7 +455,8 @@ for `<branch>` against its base, and the worktree path. Read the actual diff wit
 human-in-the-loop step even though Claude is running it, and it is what makes
 auto-approve acceptable in the first place. Then follow section 4 steps 7 to 9:
 fix by re-prompting if needed, at most twice, present the result and ask the user
-how to merge, and clean up the worktree once they decide.
+how to merge, and once they decide, clean up the workspace, branch and scratch
+state and verify that the cleanup actually happened.
 
 ## 11. Read logs
 
