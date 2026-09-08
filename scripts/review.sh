@@ -31,19 +31,11 @@ worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")
   exit 1
 }
 
-# launch.sh pins the base commit at worktree-creation time, which is the only
-# reliable answer: inside this worktree HEAD is the task branch itself, so
-# resolving the base from here would just give back the branch tip.
-base_sha=$(jq -r '.base_sha // ""' <<<"$entry")
-base_ref="$base_sha"
-if [[ -z "$base_ref" ]]; then
-  # State file from before base_sha existed, or an unresolvable base ref.
-  base_ref="$base"
-  [[ -z "$base_ref" || "$base_ref" == "HEAD" ]] && base_ref=$(git -C "$worktree_path" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)
-  [[ -n "$base_ref" ]] || { echo "ERROR: cannot work out the base commit for '$NAME'." >&2; exit 1; }
-fi
-git -C "$worktree_path" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null \
-  || { echo "ERROR: base '$base_ref' is not a commit in $worktree_path." >&2; exit 1; }
+base_ref=$(resolve_base_ref "$entry" "$worktree_path") || {
+  echo "ERROR: cannot work out a usable base commit for '$NAME'." >&2
+  echo "State says base='$base', base_sha='$(jq -r '.base_sha // ""' <<<"$entry")'." >&2
+  exit 1
+}
 
 verify_file=$(verify_file_for "$NAME")
 verify_status="not run"
@@ -51,6 +43,20 @@ verify_cmd=""
 if [[ -f "$verify_file" ]]; then
   verify_status=$(jq -r '.status // "?"' "$verify_file" 2>/dev/null || echo "?")
   verify_cmd=$(jq -r '.cmd // ""' "$verify_file" 2>/dev/null || echo "")
+fi
+
+critique_file=$(critique_file_for "$NAME")
+critique_verdict="not run"
+critique_summary=""
+critique_issues="[]"
+critique_model=""
+critique_confidence=""
+if [[ -f "$critique_file" ]]; then
+  critique_verdict=$(jq -r '.verdict // "?"' "$critique_file" 2>/dev/null || echo "?")
+  critique_summary=$(jq -r '.summary // ""' "$critique_file" 2>/dev/null || echo "")
+  critique_issues=$(jq -c '.issues // []' "$critique_file" 2>/dev/null || echo "[]")
+  critique_model=$(jq -r '.model // ""' "$critique_file" 2>/dev/null || echo "")
+  critique_confidence=$(jq -r '.confidence // ""' "$critique_file" 2>/dev/null || echo "")
 fi
 
 echo "=== $NAME ==="
@@ -64,6 +70,15 @@ if [[ "$verify_status" == "not run" ]]; then
 elif [[ "$verify_status" == "fail" ]]; then
   echo "           verify FAILED; re-prompt the agent before reviewing further"
 fi
+echo "critique:  $critique_verdict${critique_model:+ (${critique_model}${critique_confidence:+, confidence: $critique_confidence})}"
+case "$critique_verdict" in
+  "not run") echo "           run scripts/critique.sh $NAME first; it is cheaper than your attention" ;;
+  revise|reject) echo "           the reviewer wants changes; the issues below are what to send back" ;;
+esac
+if [[ -n "$critique_summary" ]]; then echo "           $critique_summary"; fi
+if [[ "$(jq 'length' <<<"$critique_issues")" -gt 0 ]]; then
+  jq -r '.[] | "           [\(.severity // "?")] \(.file // "?"): \(.note // "")"' <<<"$critique_issues"
+fi
 echo "branch:    $branch"
 echo "base:      $base (resolved: ${base_ref:0:12})"
 echo "worktree:  $worktree_path"
@@ -74,5 +89,6 @@ echo
 echo "--- diffstat ---"
 git -C "$worktree_path" diff --stat "${base_ref}...HEAD" || echo "(diff failed, check base ref)"
 echo
-echo "Read the full diff yourself before deciding:"
+echo "Read the full diff yourself before deciding. A verify pass means the tests ran"
+echo "and a critique pass means one cheap model found nothing; neither is approval:"
 echo "  git -C \"$worktree_path\" diff ${base_ref}...HEAD"

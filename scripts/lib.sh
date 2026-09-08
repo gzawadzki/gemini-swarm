@@ -73,6 +73,39 @@ resolve_worktree() {
   [[ -n "$workspace_id" && "$workspace_id" != "null" ]] && worktree_path_of "$workspace_id"
 }
 
+# The commit a task's branch is measured against. launch.sh pins base_sha at
+# worktree-creation time, which is the only reliable answer: inside the task's
+# own worktree HEAD *is* the task branch, so resolving the base from there gives
+# back the branch tip and every diff comes out empty. Returns non-zero when no
+# usable base exists, rather than printing a ref the caller cannot diff against.
+resolve_base_ref() {
+  local entry="$1" worktree="$2" base_ref base
+  base_ref=$(jq -r '.base_sha // ""' <<<"$entry")
+  if [[ -z "$base_ref" ]]; then
+    # State written before base_sha existed, or an unresolvable base ref.
+    base=$(jq -r '.base // ""' <<<"$entry")
+    base_ref="$base"
+    if [[ -z "$base_ref" || "$base_ref" == "HEAD" ]]; then
+      base_ref=$(git -C "$worktree" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)
+    fi
+  fi
+  [[ -n "$base_ref" ]] || return 1
+  git -C "$worktree" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null || return 1
+  printf '%s' "$base_ref"
+}
+
+# The flag that turns off every confirmation for an agent kind. Lives here
+# because both launch.sh (interactive agents) and critique.sh (one-shot print
+# mode) need the same answer.
+autoflag_for_kind() {
+  case "$1" in
+    gemini) echo "--yolo" ;;
+    agy)    echo "--dangerously-skip-permissions" ;;
+    codex)  echo "--dangerously-bypass-approvals-and-sandbox" ;;
+    *)      echo "ERROR: unsupported kind '$1' (expected 'gemini', 'agy' or 'codex')" >&2; return 1 ;;
+  esac
+}
+
 # --- Antigravity quota, and the codex fallback ------------------------------
 #
 # `agy -p "/usage"` is the only machine-readable quota source. There is no
@@ -193,4 +226,70 @@ resolve_verify_cmd() {
     printf '%s' "$from_task"; return
   fi
   [[ -n "$worktree" && -d "$worktree" ]] && detect_verify_cmd "$worktree"
+}
+
+# --- Machine critique, the judgement half of the gate ------------------------
+#
+# verify.sh answers "does it still build and pass tests". It cannot answer "is
+# this the change that was asked for", and that is the question that actually
+# costs the orchestrator a full diff read. critique.sh puts a cheap model on it
+# first, running one-shot print mode on the Antigravity Gemini pool, so a diff
+# that ignored half the task or quietly deleted a test gets bounced back to its
+# author without spending any of the orchestrator's attention.
+#
+# This advises, it never approves. A `pass` here means one cheap model found
+# nothing, which is weaker evidence than a test run, so it narrows what needs
+# reading rather than replacing the read.
+
+# Model the critique runs on. Deliberately a flash tier: the job is spotting
+# obvious divergence from the brief, not out-reasoning the agent that wrote it.
+CRITIQUE_MODEL="${HERDR_SWARM_CRITIQUE_MODEL:-gemini-3.7-flash-high}"
+CRITIQUE_EFFORT="${HERDR_SWARM_CRITIQUE_EFFORT:-medium}"
+CRITIQUE_TIMEOUT="${HERDR_SWARM_CRITIQUE_TIMEOUT:-600}"
+
+# Diffs are pasted into the brief, and a giant one both blows the prompt budget
+# and buries the signal. Past this many lines the brief is truncated and the
+# reviewer is told to read the repo itself, which it has open anyway.
+CRITIQUE_DIFF_LINES="${HERDR_SWARM_CRITIQUE_DIFF_LINES:-1500}"
+
+# Path where critique.sh caches a task's verdict, read back by status.sh.
+critique_file_for() {
+  printf '%s/%s.critique.json' "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}" "$1"
+}
+
+# Which binary runs the critique. Prefers agy on the Gemini pool, drops to codex
+# when that pool is empty, and to classic gemini when agy is not installed.
+# Prints nothing when no usable binary exists.
+critique_kind_for() {
+  local model="$1"
+  if [[ -n "${HERDR_SWARM_CRITIQUE_KIND:-}" ]]; then
+    printf '%s' "$HERDR_SWARM_CRITIQUE_KIND"; return
+  fi
+  if command -v agy >/dev/null 2>&1; then
+    # agy_exhausted returns 2 when the quota cannot be read; only a definite 0%
+    # should push the critique onto another pool.
+    if ! agy_exhausted "$model"; then printf 'agy'; return; fi
+  fi
+  command -v codex  >/dev/null 2>&1 && { printf 'codex';  return; }
+  command -v gemini >/dev/null 2>&1 && { printf 'gemini'; return; }
+}
+
+# Pull the first complete JSON object out of a model's reply. Models wrap JSON
+# in prose or ``` fences however firmly the prompt forbids it, so treat that as
+# the normal case rather than as a failure. Fences carry no braces, so scanning
+# from the first { to the last } steps over them. Exits non-zero when the reply
+# has no brace pair at all; the caller still has to validate what comes out.
+extract_json() {
+  awk '
+    { buf = buf $0 "\n" }
+    END {
+      s = index(buf, "{")
+      if (s == 0) exit 1
+      for (i = length(buf); i > s; i--) {
+        if (substr(buf, i, 1) == "}") { e = i; break }
+      }
+      if (e == 0) exit 1
+      printf "%s", substr(buf, s, e - s + 1)
+    }
+  '
 }

@@ -41,6 +41,8 @@ if [[ -z "$cmd" ]]; then
   echo "No 'verify' field on the task and no known test command in $worktree_path."
   echo "Set a \"verify\" command in tasks.json, or review the diff by hand."
   write_result "skipped" ""
+  echo "Nothing was proven here, so the critique is the only gate left:"
+  echo "Next: scripts/critique.sh $NAME"
   exit 0
 fi
 
@@ -59,7 +61,7 @@ echo "---------------------"
 if [[ "$rc" -eq 0 ]]; then
   echo "VERIFY PASS ($cmd)"
   write_result "pass" "$cmd"
-  echo "Next: scripts/review.sh $NAME"
+  echo "Next: scripts/critique.sh $NAME"
 else
   echo "VERIFY FAIL (exit $rc): $cmd"
   write_result "fail" "$cmd"
