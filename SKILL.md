@@ -68,22 +68,24 @@ quality tradeoff. Pick one **per task** based on the task's actual difficulty.
 Do not default everything to the biggest model. Classic `gemini` CLI has no model
 menu, so this applies to `kind: "agy"` and `kind: "codex"` only.
 
-Most agy slugs bake the reasoning effort into the name, so `gemini-3.7-flash-low`
-and `gemini-3.7-flash-high` are separate slugs. A `--effort` flag
+Most agy slugs bake the reasoning effort into the name, so `gemini-3.8-flash-low`
+and `gemini-3.8-flash-high` are separate slugs. A `--effort` flag
 (`low|medium|high`) exists as well. Run `agy models` on the target machine to
 confirm the live list, since it changes between versions. Confirmed with
-Antigravity CLI 1.1.22:
+Antigravity CLI 1.1.27:
 
 | Model slug | Use it for |
 |------------|------------|
-| `gemini-3.7-flash-low`, `-medium`, `-high` | Cheap and fast. Formatting, boilerplate, mechanical fixes. Do not park it on a hard bug. |
+| `gemini-3.8-flash-low`, `-medium`, `-high` | Cheap and fast. Formatting, boilerplate, mechanical fixes. Do not park it on a hard bug. Newest Flash generation; prefer it over the 3.7 and 3.6 slugs. |
 | `gemini-3.1-pro-low`, `gemini-3.1-pro-high` | The default pick for agentic work. 1M context, steady on big repos. Choose this when nothing else fits better. |
 | `claude-sonnet-4-6` | Step-by-step reasoning without Opus pricing. Code review, non-trivial refactor, explaining why something breaks. |
 | `claude-opus-4-6-thinking` | The heaviest model here. Security review, nasty bugs, architecture. Expensive, so save it for tasks where Sonnet and Gemini Pro already failed. |
 | `gpt-oss-120b-medium` | Open-weight, 400K context, generally below Gemini Pro and Opus at coding. Use it for a second opinion, rarely as the first pick. |
 
-Older slugs (`gemini-3.6-flash-*`, `gemini-3.5-flash-*`) are still listed and
-still work. Prefer the newest generation unless the user asks otherwise.
+Older slugs (`gemini-3.7-flash-*`, `gemini-3.6-flash-*`) are still listed and
+still work. Prefer the newest generation unless the user asks otherwise. Google
+adds a Flash generation faster than this file gets updated, so if `agy models`
+shows a higher number than the table does, trust `agy models` and use it.
 
 ### Default to the Gemini pool; you are the reasoning
 
@@ -97,7 +99,7 @@ provide as the orchestrator.
 
 So the default routing when generating `tasks.json` is:
 
-1. Mechanical, low-risk, well-defined goes to `gemini-3.7-flash-medium`.
+1. Mechanical, low-risk, well-defined goes to `gemini-3.8-flash-medium`.
 2. **Everything else** — ordinary features, bugfixes, refactors, and reviews —
    goes to `gemini-3.1-pro-high`. This is the default for almost every task.
 3. Reach for a `claude-*` or `gpt-*` slug **only when the user names it**, or when
@@ -190,7 +192,8 @@ Pipeline, in order:
    not call `workspace create` separately for these tasks. Every herdr JSON field
    path the scripts depend on lives in `scripts/lib.sh`. The response shape is
    undocumented upstream, so when a herdr upgrade breaks something, fix it there
-   rather than in four places. Confirmed with herdr and Antigravity CLI 1.1.22:
+   rather than in four places. Confirmed with herdr 0.8.2 and Antigravity CLI
+   1.1.27:
    - agent state is `.result.agent.agent_status`, **not** `.status`
    - input readiness is `.result.agent.interactive_ready`
    - checkout path is `.result.workspace.worktree.checkout_path`, **not**
@@ -435,7 +438,7 @@ CRITIQUE column of `status.sh` and at the top of `review.sh`:
 Exit status is 0 for everything except `revise` and `reject`, which exit 1, so a
 tooling failure never wedges the pipeline — it just falls through to your read.
 
-It runs on `gemini-3.7-flash-high` by default and falls back to `codex`, then to
+It runs on `gemini-3.8-flash-high` by default and falls back to `codex`, then to
 classic `gemini`, the same way `launch.sh` does. Override with
 `HERDR_SWARM_CRITIQUE_MODEL`, `HERDR_SWARM_CRITIQUE_KIND`,
 `HERDR_SWARM_CRITIQUE_EFFORT`, `HERDR_SWARM_CRITIQUE_TIMEOUT` (seconds, default
@@ -495,7 +498,7 @@ review gate. It is append-only; delete it yourself when it gets long.
 
 ```
 2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
-2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.7-flash-high
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.8-flash-high
 2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
 ```
 

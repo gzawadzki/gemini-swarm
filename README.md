@@ -131,7 +131,7 @@ that wrote it, the task, the event, and the command with its exit code:
 
 ```
 2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
-2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.7-flash-high
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.8-flash-high
 2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
 ```
 
@@ -176,7 +176,7 @@ It narrows what you have to read; it does not replace reading it.
 
 | Variable | Effect |
 |----------|--------|
-| `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.7-flash-high`. |
+| `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.8-flash-high`. |
 | `HERDR_SWARM_CRITIQUE_KIND` | Force `agy`, `codex` or `gemini` instead of auto-picking. |
 | `HERDR_SWARM_CRITIQUE_EFFORT` | Reasoning effort for the codex path, default `medium`. |
 | `HERDR_SWARM_CRITIQUE_TIMEOUT` | Seconds before the reviewer is killed, default `600`. |

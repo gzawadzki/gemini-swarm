@@ -3,7 +3,7 @@
     {
       "name": "rename-vars",
       "kind": "agy",
-      "model": "gemini-3.7-flash-medium",
+      "model": "gemini-3.8-flash-medium",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/rename-vars",
       "prompt": "Rename the misleading variable `tmp` to `pending_rows` throughout src/pipeline.py and update any docstrings that reference it.",

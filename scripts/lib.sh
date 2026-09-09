@@ -363,7 +363,7 @@ resolve_verify_cmd() {
 
 # Model the critique runs on. Deliberately a flash tier: the job is spotting
 # obvious divergence from the brief, not out-reasoning the agent that wrote it.
-CRITIQUE_MODEL="${HERDR_SWARM_CRITIQUE_MODEL:-gemini-3.7-flash-high}"
+CRITIQUE_MODEL="${HERDR_SWARM_CRITIQUE_MODEL:-gemini-3.8-flash-high}"
 CRITIQUE_EFFORT="${HERDR_SWARM_CRITIQUE_EFFORT:-medium}"
 CRITIQUE_TIMEOUT="${HERDR_SWARM_CRITIQUE_TIMEOUT:-600}"
 
