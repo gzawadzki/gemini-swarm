@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # Launch one or more gemini/agy sub-agents through herdr, each on its own
 # git worktree + branch, per a tasks.json config.
-# Usage: launch.sh <tasks.json>
+# Usage: launch.sh [--trace] <tasks.json>
 set -euo pipefail
 
-TASKS_FILE="${1:?Usage: launch.sh <tasks.json>}"
-STATE_DIR="${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
-STATE_FILE="$STATE_DIR/state.json"
-
+# lib.sh is sourced before the positional arguments are read, because it owns
+# the --trace parsing that has to run first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+TRACE_SRC="launch"
+strip_trace_flag "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
+trace_banner
+
+TASKS_FILE="${1:?Usage: launch.sh [--trace] <tasks.json>}"
+STATE_DIR="${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
+STATE_FILE="$STATE_DIR/state.json"
 
 if [[ "${HERDR_ENV:-}" != "1" ]]; then
   echo "ERROR: HERDR_ENV != 1, so this is not a herdr-managed pane. Refusing to launch agents." >&2
@@ -27,6 +32,7 @@ entries_file="$STATE_DIR/.entries.jsonl"
 
 n_tasks=$(jq '.tasks | length' "$TASKS_FILE")
 echo "Launching $n_tasks task(s) from $TASKS_FILE"
+trace "-" "run.start" "$n_tasks task(s) from $TASKS_FILE"
 
 for i in $(seq 0 $((n_tasks - 1))); do
   task=$(jq -c ".tasks[$i]" "$TASKS_FILE")
@@ -63,6 +69,7 @@ for i in $(seq 0 $((n_tasks - 1))); do
   if [[ "$kind" == "agy" && "${HERDR_SWARM_NO_FALLBACK:-0}" != "1" ]]; then
     quota_rc=0
     agy_exhausted "$model" || quota_rc=$?
+    trace "$name" "quota.check" "$(agy_family_for_model "$model") -> rc=$quota_rc (0=empty 1=ok 2=unknown)"
     case "$quota_rc" in
       0)
         echo "==> [$name] $(agy_family_for_model "$model") is at 0%. Running on codex $CODEX_FALLBACK_MODEL ($CODEX_FALLBACK_EFFORT) instead of agy ${model:-default}."
@@ -70,12 +77,14 @@ for i in $(seq 0 $((n_tasks - 1))); do
         kind="codex"
         model="$CODEX_FALLBACK_MODEL"
         effort="$CODEX_FALLBACK_EFFORT"
+        trace "$name" "kind.resolve" "codex $model / $effort (fallback from $fallback_from)"
         ;;
       2)
         echo "WARN: [$name] could not read the agy quota, so the task stays on agy. Check it by hand with: MSYS_NO_PATHCONV=1 agy -p /usage" >&2
         ;;
     esac
   fi
+  [[ -n "$fallback_from" ]] || trace "$name" "kind.resolve" "$kind ${model:-default}${effort:+ / $effort} (no fallback)"
 
   model_args=()
   case "$kind" in
@@ -121,6 +130,9 @@ for i in $(seq 0 $((n_tasks - 1))); do
   # <branch>` resolves to the branch tip and review.sh reports an empty diff.
   base_sha=$(git -C "$repo" rev-parse --verify "${base:-HEAD}^{commit}" 2>/dev/null || true)
   [[ -n "$base_sha" ]] || echo "WARN: [$name] could not resolve base '${base:-HEAD}' to a commit; review.sh will have to guess." >&2
+  trace "$name" "base.pin" "${base:-HEAD} -> ${base_sha:-unresolved}"
+
+  trace "$name" "herdr.exec" "worktree create --cwd $repo --branch $branch ${base_args[*]-}"
   created=$(herdr worktree create --cwd "$repo" --branch "$branch" "${base_args[@]}" --label "$name" --no-focus)
 
   pane_id=$(jq -r '.result.root_pane.pane_id' <<<"$created")
@@ -130,17 +142,21 @@ for i in $(seq 0 $((n_tasks - 1))); do
   if [[ -z "$worktree_path" ]]; then
     echo "WARN: [$name] could not resolve the worktree path. review.sh will have to ask herdr for it." >&2
   fi
+  trace "$name" "worktree.ready" "pane=$pane_id workspace=$workspace_id path=${worktree_path:-unresolved}"
 
   echo "==> [$name] starting $kind agent in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
   # One agent failing to start must not abandon the tasks after it, and it must
   # not leave an empty worktree behind either. Tear this one down and carry on.
+  trace "$name" "agent.start" "kind=$kind pane=$pane_id timeout=$timeout_ms args: $autoflag ${model_args[*]-} ${extra_args[*]-}"
   if ! herdr agent start "$name" --kind "$kind" --pane "$pane_id" --timeout "$timeout_ms" \
        -- "$autoflag" "${model_args[@]}" "${extra_args[@]}" >/dev/null; then
+    trace "$name" "agent.start" "failed, tearing the worktree back down"
     echo "ERROR: [$name] $kind did not start. Read the pane with: herdr agent read $name --source recent-unwrapped" >&2
     herdr worktree remove --workspace "$workspace_id" --force >/dev/null 2>&1 \
       || echo "WARN: [$name] could not remove workspace $workspace_id; clean it up by hand." >&2
     continue
   fi
+  trace "$name" "agent.start" "started"
 
   full_prompt="${prompt}
 
@@ -154,11 +170,18 @@ When you are completely finished, write a JSON file to ${status_file} with the s
   # with an empty input box, looking exactly like a task nobody has reviewed yet.
   echo "==> [$name] waiting for $kind to accept input"
   ready=""
+  waited=0
   for _ in $(seq 1 60); do
     if agent_ready "$name"; then ready=1; break; fi
+    waited=$((waited + 1))
     sleep 1
   done
-  [[ -n "$ready" ]] || echo "WARN: [$name] still not interactive after 60s. Sending anyway." >&2
+  if [[ -n "$ready" ]]; then
+    trace "$name" "agent.ready" "interactive after ${waited}s"
+  else
+    trace "$name" "agent.ready" "still not interactive after 60s, sending anyway"
+    echo "WARN: [$name] still not interactive after 60s. Sending anyway." >&2
+  fi
 
   echo "==> [$name] sending prompt (not waiting, runs in background)"
   submit_prompt "$name" "$full_prompt" || echo "ERROR: [$name] prompt was not picked up; resend it by hand." >&2
@@ -176,11 +199,14 @@ When you are completely finished, write a JSON file to ${status_file} with the s
       worktree_path: $worktree_path, status_file: $status_file, verify: $verify,
       prompt: $prompt}' \
     >> "$entries_file"
+  trace "$name" "state.write" "entry recorded"
 done
 
 jq -s '.' "$entries_file" > "$STATE_FILE"
 rm -f "$entries_file"
+trace "-" "run.end" "$(jq 'length' "$STATE_FILE") of $n_tasks task(s) launched, state in $STATE_FILE"
 
 echo
 echo "Launched. State written to $STATE_FILE"
 echo "Check on them with: scripts/status.sh"
+if trace_enabled; then echo "Trace of this run: $(trace_file)"; fi

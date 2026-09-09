@@ -355,6 +355,10 @@ For each task this:
 Launching confirms that the agent started and accepted the prompt. It confirms
 nothing about the work.
 
+Add `--trace` (section 12) when you want the launch decisions on the record —
+which pool was read, which model each task ended up on, and whether the prompt
+actually landed. Worth doing on the first run in a new repo.
+
 ## 7. Check status
 
 ```bash
@@ -467,6 +471,56 @@ scripts/logs.sh <task-name> [lines]
 This wraps `herdr agent read <name> --source recent-unwrapped --lines <N>`,
 defaulting to 150. Use `recent-unwrapped` rather than `visible`, because it is not
 limited to the current terminal viewport.
+
+## 12. Trace mode: see what the swarm actually ran
+
+Every script takes `--trace`. It can go anywhere in the arguments, before or
+after the positional ones:
+
+```bash
+scripts/launch.sh --trace tasks.json
+scripts/critique.sh fix-auth-bug --trace
+```
+
+For a whole session, set `HERDR_SWARM_TRACE=1` instead and drop the flag;
+`--no-trace` on a single call overrides it. Off by default, and when it is off it
+costs nothing — no subprocesses run and no file is created.
+
+Every external call the swarm makes gets one line in
+`$HERDR_SWARM_STATE_DIR/trace.log` (`.herdr-swarm/trace.log` by default):
+timestamp, which script wrote it, the task, the event, and the command with its
+exit code. The log lives in the state dir and never inside a worktree, because
+writing into a worktree would flip its CLEAN column to `DIRTY` and break the
+review gate. It is append-only; delete it yourself when it gets long.
+
+```
+2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.7-flash-high
+2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
+```
+
+The source tags are `launch`, `status`, `verify`, `critiq`, `review` and `logs`.
+A task column of `-` means the event belongs to the run rather than one task.
+The events worth knowing:
+
+| script | events |
+|--------|--------|
+| `launch` | `run.start`, `quota.check`, `kind.resolve` (which model and whether it fell back), `base.pin`, `herdr.exec`, `worktree.ready`, `agent.start`, `agent.ready`, `prompt.submit` / `prompt.landed` / `prompt.stalled` / `prompt.lost`, `state.write`, `run.end` |
+| `status` | `poll`, one compact line per task |
+| `verify` | `cmd.resolve` (the command and whether it came from `tasks.json` or auto-detection), `cmd.exec` |
+| `critiq` | `base.resolve`, `diff.collect`, `quota.read`, `reviewer.pick`, `reviewer.exec`, `verdict.parse`, `verdict.write` |
+| `review` | `base.resolve`, `review.read` |
+| `logs` | `herdr.exec` |
+
+Reach for this when something looks like success but is not: a prompt herdr
+accepted that the agent never saw (`prompt.stalled` / `prompt.lost`), a quota
+read that failed open (`quota.read` with a non-zero rc or "no percentages"), or a
+base ref that resolved to the branch tip and made the diff look empty
+(`base.resolve`, `diff.collect`). Those are the failures that do not raise an
+error anywhere else.
+
+Prompts are never written to the log, only their byte count. Keep it that way if
+you extend the tracing: the log is meant to stay safe to paste into a chat.
 
 ## Safety notes to apply, not just mention
 

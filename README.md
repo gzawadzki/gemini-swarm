@@ -113,6 +113,39 @@ scripts/logs.sh <task-name> [lines]
 State lives in `.herdr-swarm/state.json`. Override the location with
 `HERDR_SWARM_STATE_DIR`.
 
+## Trace mode
+
+Every script takes `--trace`, before or after its positional arguments:
+
+```bash
+scripts/launch.sh --trace tasks.json
+```
+
+For a whole session use `HERDR_SWARM_TRACE=1` instead; `--no-trace` on a single
+call overrides it. It is off by default, and while off it creates no file and
+spawns no subprocess.
+
+Each external call the swarm makes — `herdr`, `agy`, `codex`, `git`, the verify
+command — gets one line in `.herdr-swarm/trace.log` with a timestamp, the script
+that wrote it, the task, the event, and the command with its exit code:
+
+```
+2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.7-flash-high
+2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
+```
+
+The log always goes to the state dir, never into a worktree — a file written
+inside a worktree would turn its CLEAN column `DIRTY` and break the review gate.
+It appends; delete it yourself when it gets long. Prompts are recorded as a byte
+count only, so the log stays safe to paste.
+
+This is for the failures that look like success: a prompt herdr accepted but the
+agent never saw (`prompt.stalled`, `prompt.lost`), a quota read that failed open
+(`quota.read`), a base ref that resolved to the branch tip and made the diff look
+empty (`base.resolve`, `diff.collect`). `SKILL.md` section 12 lists the full
+event vocabulary per script.
+
 ## Machine critique
 
 `verify.sh` answers "does it still build". It cannot answer "did the agent do

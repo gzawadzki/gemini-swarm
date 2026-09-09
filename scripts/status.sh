@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Report status for every task launched via launch.sh.
-# Usage: status.sh [state.json]
+# Usage: status.sh [--trace] [state.json]
 set -euo pipefail
+
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+TRACE_SRC="status"
+strip_trace_flag "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
 
 STATE_DIR="${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
 STATE_FILE="${1:-$STATE_DIR/state.json}"
 
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required." >&2; exit 1; }
 [[ -f "$STATE_FILE" ]] || { echo "ERROR: $STATE_FILE not found. Run launch.sh first." >&2; exit 1; }
-
-# shellcheck source=lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
   "TASK" "AGENT" "HERDR" "RESULT" "TESTS" "CLEAN" "VERIFY" "CRITIQUE" "SUMMARY"
@@ -75,6 +77,11 @@ for i in $(seq 0 $((n - 1))); do
 
   printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
     "$name" "$kind" "$herdr_state" "$result" "$tests" "$clean" "$verify" "$critique" "$summary"
+
+  # One compact line per task, not one per column read: status.sh is the script
+  # that gets polled, and a chatty trace here would bury the launch and gate
+  # events that are actually worth reading back.
+  trace "$name" "poll" "herdr=$herdr_state result=$result clean=$clean verify=$verify critique=$critique"
 
   # Decide the single next command for this task.
   if [[ "$herdr_state" == "blocked" ]]; then

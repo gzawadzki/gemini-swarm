@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Show the commit log and diffstat for one task's branch, for review before merge.
-# Usage: review.sh <task-name> [state.json]
+# Usage: review.sh [--trace] <task-name> [state.json]
 set -euo pipefail
 
-NAME="${1:?Usage: review.sh <task-name> [state.json]}"
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+TRACE_SRC="review"
+strip_trace_flag "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
+trace_banner
+
+NAME="${1:?Usage: review.sh [--trace] <task-name> [state.json]}"
 STATE_DIR="${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
 STATE_FILE="${2:-$STATE_DIR/state.json}"
 
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required." >&2; exit 1; }
 [[ -f "$STATE_FILE" ]] || { echo "ERROR: $STATE_FILE not found. Run launch.sh first." >&2; exit 1; }
-
-# shellcheck source=lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 entry=$(jq -c --arg name "$NAME" '.[] | select(.name == $name)' "$STATE_FILE")
 [[ -n "$entry" ]] || { echo "ERROR: no task named '$NAME' in $STATE_FILE." >&2; exit 1; }
@@ -58,6 +61,8 @@ if [[ -f "$critique_file" ]]; then
   critique_model=$(jq -r '.model // ""' "$critique_file" 2>/dev/null || echo "")
   critique_confidence=$(jq -r '.confidence // ""' "$critique_file" 2>/dev/null || echo "")
 fi
+
+trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict base=${base_ref:0:12}"
 
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"

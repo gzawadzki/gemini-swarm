@@ -8,6 +8,84 @@
 #     not .result.workspace.cwd (which is absent)
 # Keep those paths in this file only, so a herdr upgrade means one edit.
 
+# --- Trace -------------------------------------------------------------------
+#
+# Off by default. Turned on with --trace on any script, or HERDR_SWARM_TRACE=1
+# for a whole session. Every external call the swarm makes gets one line in
+# $STATE_DIR/trace.log: what was run, against which task, and what it returned.
+#
+# This exists because the interesting failures here are not exceptions. A prompt
+# that herdr accepts and the agent never sees, a quota read that silently fails
+# open, a base ref that resolves to the branch tip and makes the diff look empty
+# — all of those look like success from the outside. The trace is where you find
+# out which one happened.
+#
+# The log goes in the state dir, never in a worktree: writing into a worktree
+# would flip its CLEAN column to DIRTY and break the review gate.
+
+# Source tag for the trace, overridden by each script (launch, verify, ...).
+TRACE_SRC="${TRACE_SRC:-lib}"
+
+trace_enabled() { [[ "${HERDR_SWARM_TRACE:-0}" == "1" ]]; }
+
+trace_file() {
+  printf '%s/trace.log' "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
+}
+
+# trace <task> <event> [detail...]
+# <task> may be "-" for events that belong to the run rather than one task.
+trace() {
+  trace_enabled || return 0
+  local task="$1" event="$2"; shift 2
+  local file; file=$(trace_file)
+  mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
+  printf '%s %-7s %-20s %-16s %s\n' \
+    "$(date -u +%FT%TZ)" "$TRACE_SRC" "$task" "$event" "$*" >> "$file" 2>/dev/null || true
+}
+
+# trace_run <task> <event> -- <cmd...>
+# Runs the command, records it with its exit code, and returns that exit code so
+# the caller's own error handling is unchanged. stdout/stderr pass through
+# untouched, so this is safe to wrap around a command whose output is captured.
+#
+# The rc is captured with `|| rc=$?` rather than let through, because every call
+# site here runs under `set -e` and a wrapped failure must stay the caller's
+# decision to make, not an abort inside the helper.
+trace_run() {
+  local task="$1" event="$2"; shift 2
+  [[ "${1:-}" == "--" ]] && shift
+  if ! trace_enabled; then "$@"; return $?; fi
+  trace "$task" "$event" "exec: $*"
+  local rc=0
+  "$@" || rc=$?
+  trace "$task" "$event" "rc=$rc"
+  return "$rc"
+}
+
+# Pull --trace / --no-trace out of a script's arguments before it reads its
+# positional ones, so the flag works on every script without each of them
+# growing its own parser. Results land in the ARGV array; callers do:
+#   strip_trace_flag "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
+strip_trace_flag() {
+  ARGV=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --trace)    HERDR_SWARM_TRACE=1 ;;
+      --no-trace) HERDR_SWARM_TRACE=0 ;;
+      *)          ARGV+=("$a") ;;
+    esac
+  done
+  export HERDR_SWARM_TRACE
+}
+
+# Announce the log once per run, so a --trace invocation says where to look
+# instead of leaving the user to guess.
+trace_banner() {
+  trace_enabled || return 0
+  echo "trace: $(trace_file)" >&2
+}
+
 # Lifecycle state of an agent: idle | working | blocked | done | unreachable.
 agent_state() {
   herdr agent get "$1" 2>/dev/null \
@@ -32,25 +110,39 @@ agent_seq() {
 # Returns non-zero when even the resend goes nowhere.
 submit_prompt() {
   local name="$1" text="$2" attempt before resp type
+  # Bytes, not the prompt itself: the trace is meant to be readable and to stay
+  # safe to paste, and a full brief in the log would be neither.
+  trace "$name" "prompt.submit" "${#text} bytes"
   for attempt in 1 2; do
     before=$(agent_seq "$name")
     resp=$(herdr agent prompt "$name" "$text" 2>&1)
     type=$(jq -r '.result.type // empty' <<<"$resp" 2>/dev/null || true)
     if [[ "$type" != "agent_prompted" ]]; then
+      trace "$name" "prompt.submit" "attempt $attempt rejected by herdr: $resp"
       echo "WARN: [$name] herdr rejected the prompt: $resp" >&2
     else
       # Two independent signals that it landed: the change counter moved, or the
       # agent left idle. On a busy agent the counter can lag past our window,
       # so relying on it alone caused needless resends.
       for _ in $(seq 1 15); do
-        [[ "$(agent_seq "$name")" != "$before" ]] && return 0
-        case "$(agent_state "$name")" in working|blocked) return 0 ;; esac
+        if [[ "$(agent_seq "$name")" != "$before" ]]; then
+          trace "$name" "prompt.landed" "state_change_seq moved (attempt $attempt)"
+          return 0
+        fi
+        case "$(agent_state "$name")" in
+          working|blocked)
+            trace "$name" "prompt.landed" "agent left idle (attempt $attempt)"
+            return 0
+            ;;
+        esac
         sleep 1
       done
+      trace "$name" "prompt.stalled" "herdr accepted it, agent did not react in 15s (attempt $attempt)"
       echo "WARN: [$name] prompt accepted but the agent did not react (attempt $attempt)." >&2
     fi
     sleep 2
   done
+  trace "$name" "prompt.lost" "both attempts failed"
   return 1
 }
 
@@ -79,7 +171,8 @@ resolve_worktree() {
 # back the branch tip and every diff comes out empty. Returns non-zero when no
 # usable base exists, rather than printing a ref the caller cannot diff against.
 resolve_base_ref() {
-  local entry="$1" worktree="$2" base_ref base
+  local entry="$1" worktree="$2" base_ref base name="-"
+  if trace_enabled; then name=$(jq -r '.name // "-"' <<<"$entry"); fi
   base_ref=$(jq -r '.base_sha // ""' <<<"$entry")
   if [[ -z "$base_ref" ]]; then
     # State written before base_sha existed, or an unresolvable base ref.
@@ -89,8 +182,15 @@ resolve_base_ref() {
       base_ref=$(git -C "$worktree" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1)
     fi
   fi
-  [[ -n "$base_ref" ]] || return 1
-  git -C "$worktree" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null || return 1
+  if [[ -z "$base_ref" ]]; then
+    trace "$name" "base.resolve" "no usable base in state"
+    return 1
+  fi
+  if ! git -C "$worktree" rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null; then
+    trace "$name" "base.resolve" "'$base_ref' is not a commit in $worktree"
+    return 1
+  fi
+  trace "$name" "base.resolve" "${base_ref:0:12}"
   printf '%s' "$base_ref"
 }
 
@@ -128,9 +228,29 @@ trap 'rm -f "$AGY_USAGE_CACHE"' EXIT
 # Print the raw /usage table, fetching it at most once per script run.
 agy_usage() {
   if [[ -s "$AGY_USAGE_CACHE" ]]; then cat "$AGY_USAGE_CACHE"; return 0; fi
-  command -v agy >/dev/null 2>&1 || return 1
-  MSYS_NO_PATHCONV=1 timeout 120 agy -p "/usage" 2>/dev/null > "$AGY_USAGE_CACHE" || return 1
-  grep -qE '[0-9]+%' "$AGY_USAGE_CACHE" || return 1
+  if ! command -v agy >/dev/null 2>&1; then
+    trace "-" "quota.read" "no agy on PATH"
+    return 1
+  fi
+  local rc=0
+  MSYS_NO_PATHCONV=1 timeout 120 agy -p "/usage" 2>/dev/null > "$AGY_USAGE_CACHE" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    trace "-" "quota.read" "agy -p /usage -> rc=$rc"
+    return 1
+  fi
+  # A reply with no percentages is agy answering in prose, which is what a
+  # mangled slash command looks like. Worth distinguishing in the log.
+  if ! grep -qE '[0-9]+%' "$AGY_USAGE_CACHE"; then
+    trace "-" "quota.read" "agy -p /usage -> rc=0 but no percentages in the reply"
+    return 1
+  fi
+  # Guarded with `if` rather than `&&`: a bare `cond && cmd` statement is the
+  # last command in the function when the trace is off, so `set -e` in the
+  # caller would take the whole script down on the false branch.
+  if trace_enabled; then
+    trace "-" "quota.read" \
+      "agy -p /usage -> rc=0 ($(grep -oE '[0-9]+%' "$AGY_USAGE_CACHE" | tr '\n' ' '))"
+  fi
   cat "$AGY_USAGE_CACHE"
 }
 

@@ -11,19 +11,22 @@
 # The verdict advises. It never approves: see the note at the bottom of the
 # output and the safety notes in SKILL.md.
 #
-# Usage: critique.sh <task-name> [state.json]
+# Usage: critique.sh [--trace] <task-name> [state.json]
 set -euo pipefail
 
-NAME="${1:?Usage: critique.sh <task-name> [state.json]}"
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+TRACE_SRC="critiq"
+strip_trace_flag "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
+trace_banner
+
+NAME="${1:?Usage: critique.sh [--trace] <task-name> [state.json]}"
 STATE_DIR="${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
 STATE_FILE="${2:-$STATE_DIR/state.json}"
 
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required." >&2; exit 1; }
 command -v git >/dev/null 2>&1 || { echo "ERROR: git is required." >&2; exit 1; }
 [[ -f "$STATE_FILE" ]] || { echo "ERROR: $STATE_FILE not found. Run launch.sh first." >&2; exit 1; }
-
-# shellcheck source=lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 entry=$(jq -c --arg name "$NAME" '.[] | select(.name == $name)' "$STATE_FILE")
 [[ -n "$entry" ]] || { echo "ERROR: no task named '$NAME' in $STATE_FILE." >&2; exit 1; }
@@ -59,12 +62,14 @@ write_verdict() {  # verdict  summary  issues-json
         --arg confidence "$confidence" --arg ts "$(date -u +%FT%TZ)" \
     '{verdict: $verdict, confidence: $confidence, model: $model, kind: $kind,
       issues: $issues, summary: $summary, ran_at: $ts}' > "$critique_file"
+  trace "$NAME" "verdict.write" "$1${confidence:+ (confidence: $confidence)} -> $critique_file"
 }
 
 # --- Gather what the reviewer needs to judge --------------------------------
 
 diff_stat=$(git -C "$worktree_path" diff --stat "${base_ref}...HEAD" 2>/dev/null || true)
 diff_body=$(git -C "$worktree_path" diff "${base_ref}...HEAD" 2>/dev/null || true)
+trace "$NAME" "diff.collect" "git diff ${base_ref:0:12}...HEAD -> $(wc -l <<<"$diff_body") lines"
 
 if [[ -z "$diff_body" ]]; then
   echo "=== $NAME: critique SKIPPED ==="
@@ -171,6 +176,7 @@ instruction="Read the code review brief at ${brief_arg} and follow it exactly. O
 # --- Pick a pool and run it -------------------------------------------------
 
 critique_kind=$(critique_kind_for "$CRITIQUE_MODEL")
+trace "$NAME" "reviewer.pick" "${critique_kind:-<none>} for model $CRITIQUE_MODEL"
 if [[ -z "$critique_kind" ]]; then
   echo "=== $NAME: critique SKIPPED ==="
   echo "No agy, codex or gemini binary on PATH, so nothing can run the review." >&2
@@ -220,8 +226,10 @@ echo
 # MSYS_NO_PATHCONV so a path inside the instruction is not rewritten, same as
 # the /usage call in lib.sh.
 run_rc=0
+trace "$NAME" "reviewer.exec" "in $worktree_path: ${cmd[*]}"
 ( cd "$worktree_path" && MSYS_NO_PATHCONV=1 timeout "$CRITIQUE_TIMEOUT" "${cmd[@]}" ) \
   > "$reply_file" 2>&1 || run_rc=$?
+trace "$NAME" "reviewer.exec" "rc=$run_rc, $(wc -c <"$reply_file") bytes of reply in $reply_file"
 
 if [[ "$run_rc" -ne 0 && ! -s "$reply_file" ]]; then
   echo "CRITIQUE ERROR (exit $run_rc): the reviewer produced no output."
@@ -236,6 +244,7 @@ fi
 
 parsed=""
 if ! parsed=$(extract_json < "$reply_file" 2>/dev/null) || ! jq -e . >/dev/null 2>&1 <<<"$parsed"; then
+  trace "$NAME" "verdict.parse" "no valid JSON object in the reply"
   echo "CRITIQUE UNPARSEABLE: the reviewer did not return usable JSON."
   echo "Raw reply: $reply_file"
   write_verdict "unparseable" "reviewer reply was not valid JSON"
@@ -255,6 +264,7 @@ case "$verdict" in
   *) verdict="unparseable"; summary="reviewer returned an unknown verdict" ;;
 esac
 
+trace "$NAME" "verdict.parse" "$verdict ($(jq 'length' <<<"$issues") issues, confidence ${confidence:-unset})"
 write_verdict "$verdict" "$summary" "$issues"
 
 echo "VERDICT: $verdict${confidence:+ (confidence: $confidence)}"
