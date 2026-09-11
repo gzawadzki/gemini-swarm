@@ -3,7 +3,7 @@
     {
       "name": "rename-vars",
       "kind": "agy",
-      "model": "gemini-3.7-flash-medium",
+      "model": "gemini-3.8-flash-medium",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/rename-vars",
       "prompt": "Rename the misleading variable `tmp` to `pending_rows` throughout src/pipeline.py and update any docstrings that reference it.",
@@ -18,6 +18,7 @@
       "branch": "agent/add-rate-limiter",
       "prompt": "Add a token-bucket rate limiter middleware to src/api/middleware.py, with a unit test in tests/test_rate_limiter.py. Run the new test and make sure it passes.",
       "args": [],
+      "verify": "pytest -q tests/test_rate_limiter.py",
       "timeout_ms": 1200000
     },
     {
@@ -48,6 +49,7 @@
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py. Then run `pytest tests/test_auth.py` and confirm it passes.",
       "args": [],
+      "verify": "pytest -q tests/test_auth.py",
       "timeout_ms": 900000
     }
   ]

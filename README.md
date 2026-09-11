@@ -2,9 +2,11 @@
 
 A Claude Code skill for running parallel Gemini CLI / Antigravity CLI (`agy`)
 sub-agents through [herdr](https://github.com/herdr). Each task gets its own git
-worktree and branch, runs with auto-approve enabled, and is reviewed before
-anything lands on your branch. When the Antigravity quota of your main account is
-empty, tasks run on a second Antigravity account instead.
+worktree and branch, runs with auto-approve enabled, and passes a two-stage
+egress gate — the project's tests, then a cheap-model critique of the diff —
+before you read it and decide what lands on your branch. When the Antigravity
+quota of your main account is empty, tasks run on a second Antigravity account;
+when that one is empty too, they run on `codex`.
 
 ## Requirements
 
@@ -14,7 +16,7 @@ empty, tasks run on a second Antigravity account instead.
 - At least one agent binary: `agy` (Antigravity CLI), `gemini` (classic Gemini
   CLI), or `codex` (OpenAI Codex CLI)
 - Optional, for the second Antigravity account: PowerShell 7 (`pwsh`) and a
-  second Windows user, see "Two Antigravity accounts" below
+  second Antigravity login, see "Quota: two Antigravity accounts, then codex" below
 
 ## Install
 
@@ -46,6 +48,7 @@ writes the config and drives the scripts. To do it manually:
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest and report the result.",
       "args": [],
+      "verify": "pytest -q tests/test_auth.py",
       "timeout_ms": 900000
     }
   ]
@@ -54,7 +57,19 @@ writes the config and drives the scripts. To do it manually:
 
 Run `agy models` to see the live model list. Most slugs bake the reasoning effort
 into the name, so `gemini-3.1-pro-high` and `gemini-3.1-pro-low` are separate
-models.
+models. By default the swarm routes tasks to Gemini models (the large, cheap
+Antigravity pool) and reserves `claude-*`/`gpt-*` slugs for when you name them
+explicitly — the idea is that Claude does the orchestration and review while the
+swarm does volume.
+
+The optional `verify` field is a shell command run inside the worktree as an
+egress gate before the diff is reviewed (see step 4). Omit it and the tooling
+auto-detects one from the project (`npm`/`yarn`/`pnpm test`, `pytest`,
+`cargo test`, `go test`, a `test:` Make target).
+
+Write the `prompt` specifically enough to be checkable. Step 5 grades the diff
+against it, so a reviewer can measure "add a retry with backoff to the S3 upload
+in storage.py and cover it with a test" but not "improve error handling".
 
 **2. Launch.** This creates a worktree and branch per task and starts the agents
 in parallel:
@@ -70,19 +85,35 @@ scripts/launch.sh tasks.json
 scripts/status.sh
 ```
 
-**4. Review the diff** before merging anything:
+**4. Verify** — the deterministic half of the egress gate. It runs the task's
+`verify` command (or an auto-detected one) inside the worktree, so mechanical
+failures never reach the review:
+
+```bash
+scripts/verify.sh <task-name>
+```
+
+**5. Critique** — the judgement half. A cheap model on the Gemini pool reads the
+diff against the task's own prompt and answers what the tests cannot: is this the
+change that was asked for. See [Machine critique](#machine-critique):
+
+```bash
+scripts/critique.sh <task-name>
+```
+
+**6. Review the diff** before merging anything, for tasks the gate cleared:
 
 ```bash
 scripts/review.sh <task-name>
 ```
 
-**5. Read an agent's output** when something looks wrong:
+**7. Read an agent's output** when something looks wrong:
 
 ```bash
 scripts/logs.sh <task-name> [lines]
 ```
 
-**6. Close the agents** when you are done with them. A finished agy agent does
+**8. Close the agents** when you are done with them. A finished agy agent does
 not exit on its own; it sits in its pane still holding the shared Antigravity
 credential, which blocks the next account switch:
 
@@ -94,7 +125,76 @@ scripts/cleanup.sh --worktrees     # and remove a worktree once its branch is me
 State lives in `.herdr-swarm/state.json`. Override the location with
 `HERDR_SWARM_STATE_DIR`.
 
-## Two Antigravity accounts
+## Trace mode
+
+Every script takes `--trace`, before or after its positional arguments:
+
+```bash
+scripts/launch.sh --trace tasks.json
+```
+
+For a whole session use `HERDR_SWARM_TRACE=1` instead; `--no-trace` on a single
+call overrides it. It is off by default, and while off it creates no file and
+spawns no subprocess.
+
+Each external call the swarm makes — `herdr`, `agy`, `codex`, `git`, the verify
+command — gets one line in `.herdr-swarm/trace.log` with a timestamp, the script
+that wrote it, the task, the event, and the command with its exit code:
+
+```
+2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.8-flash-high
+2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
+```
+
+The log always goes to the state dir, never into a worktree — a file written
+inside a worktree would turn its CLEAN column `DIRTY` and break the review gate.
+It appends; delete it yourself when it gets long. Prompts are recorded as a byte
+count only, so the log stays safe to paste.
+
+This is for the failures that look like success: a prompt herdr accepted but the
+agent never saw (`prompt.stalled`, `prompt.lost`), a quota read that failed open
+(`quota.read`), a base ref that resolved to the branch tip and made the diff look
+empty (`base.resolve`, `diff.collect`). `SKILL.md` section 13 lists the full
+event vocabulary per script.
+
+## Machine critique
+
+`verify.sh` answers "does it still build". It cannot answer "did the agent do
+what it was asked", and that is the question that costs a full diff read. So
+`critique.sh` puts a cheap model on it first, one-shot on the Antigravity Gemini
+pool, and writes a structured verdict to `.herdr-swarm/<name>.critique.json`.
+
+The reviewer gets the task's original prompt, the diff against its base, and a
+fixed rubric: completeness, scope (deleted tests, disabled checks, unrelated
+edits), correctness, safety, tests. Style and refactor opinions are out of scope
+by instruction, since they produce noise rather than blockers.
+
+| verdict | meaning |
+|---------|---------|
+| `pass` | no blocker or major issue found — read the diff anyway |
+| `revise` | real problems; send the issue list back to the agent |
+| `reject` | wrong approach or dangerous; re-prompting will not fix it |
+| `skipped` | no diff, or no reviewer binary on PATH |
+| `unparseable` / `error` | the reviewer misbehaved; not a verdict either way |
+
+Only `revise` and `reject` exit non-zero, so a broken reviewer never wedges the
+pipeline — it falls through to your own read. The verdict shows up in the
+CRITIQUE column of `status.sh` and at the top of `review.sh`.
+
+**This advises, it never approves.** A `pass` is one cheap model's opinion of
+another model's work, which is weaker evidence than the test run, not stronger.
+It narrows what you have to read; it does not replace reading it.
+
+| Variable | Effect |
+|----------|--------|
+| `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.8-flash-high`. |
+| `HERDR_SWARM_CRITIQUE_KIND` | Force `agy`, `codex` or `gemini` instead of auto-picking. |
+| `HERDR_SWARM_CRITIQUE_EFFORT` | Reasoning effort for the codex path, default `medium`. |
+| `HERDR_SWARM_CRITIQUE_TIMEOUT` | Seconds before the reviewer is killed, default `600`. |
+| `HERDR_SWARM_CRITIQUE_DIFF_LINES` | Diff lines pasted into the brief, default `1500`. Past this the brief is truncated and the reviewer is told to read the repo itself. |
+
+## Quota: two Antigravity accounts, then codex
 
 Antigravity meters two quota pools separately, **Gemini Models** for `gemini-*`
 slugs and **Claude and GPT models** for `claude-*` and `gpt-*` slugs, each with a
@@ -104,11 +204,21 @@ a single call, and in herdr it looks identical to an agent still thinking.
 So `launch.sh` reads `agy -p "/usage"` before it starts anything. If the pool a
 task's model draws from reads 0% in either window, the swarm switches the live
 Antigravity account and runs the task on the other subscription. If that one is
-empty too, the task is **not launched at all** and the script reports when each
-account refills. Other tasks are unaffected, so a Claude task keeps running on
-the live account after the Gemini pool empties. If the quota cannot be read, the
-task stays on the live account and the script warns rather than guessing. There
-is no codex fallback: codex only ever runs when you ask for it by name.
+empty too, or there is no second account, the task runs on `codex` with
+`gpt-5.6-luna` at `xhigh` reasoning effort instead. Other tasks are unaffected,
+so a Claude task keeps running on the live account after the Gemini pool empties.
+If the quota cannot be read, the task stays on the live account and the script
+warns rather than guessing.
+
+`status.sh` marks a task on the second account with `@B` and a codex fallback
+task with `*` after the agent name; `review.sh` prints which account or model
+actually did the work.
+
+| Variable | Effect |
+|----------|--------|
+| `HERDR_SWARM_NO_FALLBACK=1` | Never fall back to codex; when no account has quota the task is not launched and the script reports when each account refills. |
+| `HERDR_SWARM_CODEX_MODEL` | Model the fallback runs, default `gpt-5.6-luna`. |
+| `HERDR_SWARM_CODEX_EFFORT` | Reasoning effort, default `xhigh`. |
 
 Only the live account's quota can be read, because `/usage` answers for whoever
 `agy` is signed in as. The other account is therefore consulted only after the
@@ -140,8 +250,8 @@ pwsh -NoProfile -File scripts/agy-account.ps1 -Mode list
 `list` prints, per entry, a truncated SHA-256 of the blob plus its size and
 write time. That is enough to see that the two accounts are actually different;
 the script never prints a credential. If the vault is empty, or `pwsh` is not
-installed, there is simply no second account and the swarm stops when the live
-one empties.
+installed, there is simply no second account and the swarm goes straight to the
+codex fallback when the live one empties.
 
 ### Why accounts cannot be mixed
 
@@ -163,7 +273,7 @@ hash cannot answer the question.
 
 | Variable | Effect |
 |----------|--------|
-| `HERDR_SWARM_NO_SWITCHING=1` | Never switch accounts; stop when the live one is empty. |
+| `HERDR_SWARM_NO_SWITCHING=1` | Never switch accounts; go to codex (or stop, with `HERDR_SWARM_NO_FALLBACK=1`) when the live one is empty. |
 
 ## Safety
 
@@ -171,5 +281,5 @@ Agents run with `--yolo`, `--dangerously-skip-permissions` or
 `--dangerously-bypass-approvals-and-sandbox`, so every confirmation is disabled.
 Worktree isolation keeps them off your checked-out files, but only point them at
 repos you are fine with an agent editing unattended, and never merge a branch you
-have not read the diff for. See the "Safety notes" section of `SKILL.md` for the
-full list.
+have not read the diff for — a verify pass and a critique pass are filters, not
+approvals. See the "Safety notes" section of `SKILL.md` for the full list.

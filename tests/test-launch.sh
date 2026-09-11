@@ -140,18 +140,38 @@ check  "no worktree was created" "" "$(grep 'worktree create' "$HERDR_CALL_LOG" 
 check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
 
 echo
-echo "== 4. no second account in the vault: nothing starts =="
+echo "== 4. no second account, fallback off: nothing starts =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(FAKE_GEM_5H_A=0 FAKE_VAULT_B=empty run_launch)
+out=$(HERDR_SWARM_NO_FALLBACK=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=empty run_launch)
 grepok "reports that no account has quota" "no Antigravity account has quota left for Gemini Models" "$out"
+grepok "says it is not launching"          "Not launching"                                          "$out"
 check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
 check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
 
 echo
-echo "== 5. switching disabled by the environment =="
+echo "== 5. switching disabled, fallback off: nothing starts =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+out=$(HERDR_SWARM_NO_FALLBACK=1 HERDR_SWARM_NO_SWITCHING=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=full run_launch)
+grepok "stops instead of switching"       "HERDR_SWARM_NO_SWITCHING=1 forbids switching" "$out"
+check  "live account untouched" "a" "$(cat "$LOCALAPPDATA/herdr-swarm/live-account")"
+check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
+
+echo
+echo "== 5b. both accounts empty: runs on codex =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+out=$(FAKE_GEM_5H_A=0 FAKE_GEM_5H_B=0 FAKE_VAULT_B=full FAKE_SWITCH_RC=0 run_launch)
+grepok "announces the fallback"           "Running on codex"                    "$out"
+grepok "starts codex, no account"         "starting codex agent in pane"        "$out"
+grepok "codex started through herdr"      "agent start t1 --kind codex"         "$(cat "$HERDR_CALL_LOG")"
+check  "state.json records the fallback" "agy:gemini-3.1-pro-high" "$(jq -r '.[0].fallback_from' "$LAST_STATE_DIR/state.json")"
+check  "state.json kind is codex" "codex" "$(jq -r '.[0].kind' "$LAST_STATE_DIR/state.json")"
+check  "state.json account is empty" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 5c. switching disabled: runs on codex without touching the account =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(HERDR_SWARM_NO_SWITCHING=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=full run_launch)
-grepok "stops instead of switching"       "HERDR_SWARM_NO_SWITCHING=1 forbids switching" "$out"
+grepok "announces the fallback"           "Running on codex"                    "$out"
 check  "live account untouched" "a" "$(cat "$LOCALAPPDATA/herdr-swarm/live-account")"
 
 echo
