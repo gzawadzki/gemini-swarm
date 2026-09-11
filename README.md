@@ -5,7 +5,8 @@ sub-agents through [herdr](https://github.com/herdr). Each task gets its own git
 worktree and branch, runs with auto-approve enabled, and passes a two-stage
 egress gate — the project's tests, then a cheap-model critique of the diff —
 before you read it and decide what lands on your branch. When the Antigravity
-quota is empty, tasks run on `codex` instead.
+quota of your main account is empty, tasks run on a second Antigravity account;
+when that one is empty too, they run on `codex`.
 
 ## Requirements
 
@@ -14,6 +15,8 @@ quota is empty, tasks run on `codex` instead.
 - `bash`, `git`, `jq`
 - At least one agent binary: `agy` (Antigravity CLI), `gemini` (classic Gemini
   CLI), or `codex` (OpenAI Codex CLI)
+- Optional, for the second Antigravity account: PowerShell 7 (`pwsh`) and a
+  second Antigravity login, see "Quota: two Antigravity accounts, then codex" below
 
 ## Install
 
@@ -104,10 +107,27 @@ scripts/critique.sh <task-name>
 scripts/review.sh <task-name>
 ```
 
+Optionally, once you have read it and it looks bigger than the task needed, ask a
+cheap model where it is overbuilt. This only suggests cuts; it never blocks and
+never judges correctness. See [Trim review](#trim-review):
+
+```bash
+scripts/trim.sh <task-name>
+```
+
 **7. Read an agent's output** when something looks wrong:
 
 ```bash
 scripts/logs.sh <task-name> [lines]
+```
+
+**8. Close the agents** when you are done with them. A finished agy agent does
+not exit on its own; it sits in its pane still holding the shared Antigravity
+credential, which blocks the next account switch:
+
+```bash
+scripts/cleanup.sh                 # close agents that reported a result
+scripts/cleanup.sh --worktrees     # and remove a worktree once its branch is merged
 ```
 
 State lives in `.herdr-swarm/state.json`. Override the location with
@@ -143,7 +163,7 @@ count only, so the log stays safe to paste.
 This is for the failures that look like success: a prompt herdr accepted but the
 agent never saw (`prompt.stalled`, `prompt.lost`), a quota read that failed open
 (`quota.read`), a base ref that resolved to the branch tip and made the diff look
-empty (`base.resolve`, `diff.collect`). `SKILL.md` section 12 lists the full
+empty (`base.resolve`, `diff.collect`). `SKILL.md` section 13 lists the full
 event vocabulary per script.
 
 ## Machine critique
@@ -174,15 +194,42 @@ CRITIQUE column of `status.sh` and at the top of `review.sh`.
 another model's work, which is weaker evidence than the test run, not stronger.
 It narrows what you have to read; it does not replace reading it.
 
+The reviewer is never the model that wrote the diff when that can be avoided: a
+task written by the critique model is reviewed by
+`HERDR_SWARM_CRITIQUE_ALT_MODEL` instead. The verdict file records
+`worker_model` and `independent`; the one unavoidable self-review, a codex
+fallback task critiqued by codex, prints a warning and writes
+`"independent": false`.
+
 | Variable | Effect |
 |----------|--------|
 | `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.8-flash-high`. |
+| `HERDR_SWARM_CRITIQUE_ALT_MODEL` | Reviewer for tasks the critique model wrote itself, default `gemini-3.1-pro-high`. |
 | `HERDR_SWARM_CRITIQUE_KIND` | Force `agy`, `codex` or `gemini` instead of auto-picking. |
 | `HERDR_SWARM_CRITIQUE_EFFORT` | Reasoning effort for the codex path, default `medium`. |
 | `HERDR_SWARM_CRITIQUE_TIMEOUT` | Seconds before the reviewer is killed, default `600`. |
 | `HERDR_SWARM_CRITIQUE_DIFF_LINES` | Diff lines pasted into the brief, default `1500`. Past this the brief is truncated and the reviewer is told to read the repo itself. |
 
-## The codex fallback
+## Trim review
+
+`trim.sh` is an optional pass after your own read, for diffs that look bigger
+than the task. A cheap model reads the diff for overengineering only —
+single-use abstractions, unused options, needless generalisation, re-implemented
+helpers, dead code — and writes suggested cuts to `.herdr-swarm/<name>.trim.json`,
+which `review.sh` then lists.
+
+It always exits 0, never judges correctness or safety, never edits the worktree,
+and is told to leave input validation, I/O error handling and tests alone. It is
+not part of the gate on purpose: YAGNI applied to every task makes agents cut
+corners that matter. Correctness first, trimming second, commit last.
+
+| Variable | Effect |
+|----------|--------|
+| `HERDR_SWARM_TRIM_MODEL` | Model for the trim pass, default the critique model. |
+| `HERDR_SWARM_TRIM_KIND` | Force `agy`, `codex` or `gemini`. |
+| `HERDR_SWARM_TRIM_TIMEOUT` | Seconds before it is killed, default the critique timeout. |
+
+## Quota: two Antigravity accounts, then codex
 
 Antigravity meters two quota pools separately, **Gemini Models** for `gemini-*`
 slugs and **Claude and GPT models** for `claude-*` and `gpt-*` slugs, each with a
@@ -190,23 +237,79 @@ weekly and a five-hour window. An agent started against an empty pool cannot mak
 a single call, and in herdr it looks identical to an agent still thinking.
 
 So `launch.sh` reads `agy -p "/usage"` before it starts anything. If the pool a
-task's model draws from reads 0% in either window, that task runs on `codex` with
+task's model draws from reads 0% in either window, the swarm switches the live
+Antigravity account and runs the task on the other subscription. If that one is
+empty too, or there is no second account, the task runs on `codex` with
 `gpt-5.6-luna` at `xhigh` reasoning effort instead. Other tasks are unaffected,
-so a Claude task keeps running on agy after the Gemini pool empties. If the quota
-cannot be read, the task stays on agy and the script warns rather than guessing.
+so a Claude task keeps running on the live account after the Gemini pool empties.
+If the quota cannot be read, the task stays on the live account and the script
+warns rather than guessing.
 
-`status.sh` marks a fallback task with a `*` after the agent name, and
-`review.sh` prints which model actually did the work.
+`status.sh` marks a task on the second account with `@B` and a codex fallback
+task with `*` after the agent name; `review.sh` prints which account or model
+actually did the work.
 
 | Variable | Effect |
 |----------|--------|
-| `HERDR_SWARM_NO_FALLBACK=1` | Skip the quota check and keep every task on agy. |
+| `HERDR_SWARM_NO_FALLBACK=1` | Never fall back to codex; when no account has quota the task is not launched and the script reports when each account refills. |
 | `HERDR_SWARM_CODEX_MODEL` | Model the fallback runs, default `gpt-5.6-luna`. |
 | `HERDR_SWARM_CODEX_EFFORT` | Reasoning effort, default `xhigh`. |
+| `HERDR_SWARM_CODEX_PLUGINS=1` | Keep codex plugins on. By default every swarm codex runs with `--disable plugins`, so plugins like caveman cannot rewrite how a worker or reviewer writes. `~/.codex/AGENTS.md` still loads. |
+
+Only the live account's quota can be read, because `/usage` answers for whoever
+`agy` is signed in as. The other account is therefore consulted only after the
+live one has actually run dry.
 
 On Windows, run `/usage` by hand as `MSYS_NO_PATHCONV=1 agy -p "/usage"`. Without
 that variable, Git Bash rewrites the leading slash into a file path and agy
 answers with prose instead of numbers.
+
+### Setting up the second account
+
+`agy` has no `--profile` or `--account` flag. Its OAuth token lives in Windows
+Credential Manager under one fixed target, `gemini:antigravity`, per Windows
+user. `scripts/agy-account.ps1` therefore keeps a *vault*: one extra credential
+entry per account, and it copies the wanted one into the live target before an
+agent starts. Both accounts then run as you, in an ordinary herdr pane with a
+real TUI; nothing about the launch differs between them.
+
+One-time setup, from your own profile, in a terminal:
+
+```powershell
+agy                       # /logout, then /login as the second subscription
+pwsh -NoProfile -File scripts/agy-account.ps1 -Mode save -Account b
+agy                       # /logout, then /login as your main subscription
+pwsh -NoProfile -File scripts/agy-account.ps1 -Mode save -Account a
+pwsh -NoProfile -File scripts/agy-account.ps1 -Mode list
+```
+
+`list` prints, per entry, a truncated SHA-256 of the blob plus its size and
+write time. That is enough to see that the two accounts are actually different;
+the script never prints a credential. If the vault is empty, or `pwsh` is not
+installed, there is simply no second account and the swarm goes straight to the
+codex fallback when the live one empties.
+
+### Why accounts cannot be mixed
+
+`agy` refreshes its OAuth token during a session and writes the new one back to
+the live target. Measured on this machine: with twelve sessions running, the
+entry was rewritten twice inside thirty seconds. Two things follow.
+
+A running agent would clobber a credential swapped in underneath it, and would
+itself continue on the swapped-in account. So a switch is refused while any `agy`
+process is alive: `launch.sh` starts nothing and tells you to wait for the
+running agents to finish. (`agy-account.ps1 -Mode use -Force` overrides this;
+the swarm never passes it.)
+
+A vault entry goes stale as soon as its account has done work, so `use` first
+copies the live credential back over the outgoing account's own vault entry.
+Which account is live is tracked in `%LOCALAPPDATA%\herdr-swarm\live-account`,
+because after a refresh the blob no longer matches anything in the vault and the
+hash cannot answer the question.
+
+| Variable | Effect |
+|----------|--------|
+| `HERDR_SWARM_NO_SWITCHING=1` | Never switch accounts; go to codex (or stop, with `HERDR_SWARM_NO_FALLBACK=1`) when the live one is empty. |
 
 ## Safety
 

@@ -26,16 +26,23 @@ for i in $(seq 0 $((n - 1))); do
   entry=$(jq -c ".[$i]" "$STATE_FILE")
   name=$(jq -r '.name' <<<"$entry")
   kind=$(jq -r '.kind // "?"' <<<"$entry")
+  account=$(jq -r '.account // "a"' <<<"$entry")
   fallback_from=$(jq -r '.fallback_from // ""' <<<"$entry")
   status_file=$(jq -r '.status_file' <<<"$entry")
   workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
   worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 
-  # A trailing * marks a task that ran on codex because its agy quota pool read
-  # 0%, so the model that did the work is not the one tasks.json asked for.
-  [[ -n "$fallback_from" ]] && kind="${kind}*"
+  # Which Antigravity subscription did the work, since both look identical in
+  # the pane and only the credential in use told them apart.
+  # A trailing * marks a task that ran on codex because every agy account was
+  # empty for its pool; the account suffix means nothing for those.
+  if [[ -n "$fallback_from" ]]; then
+    kind="${kind}*"
+  elif [[ -n "$account" && "$account" != "a" ]]; then
+    kind="${kind}@${account^^}"
+  fi
 
-  herdr_state=$(agent_state "$name")
+  herdr_state=$(task_state "$name")
 
   if [[ -f "$status_file" ]]; then
     result=$(jq -r '.status // "unknown"' "$status_file" 2>/dev/null || echo "unparseable")
@@ -106,7 +113,7 @@ for i in $(seq 0 $((n - 1))); do
   else
     # Both halves of the gate are behind it: pass, skipped, or the critique
     # itself failed to produce an answer. Either way the next step is your read.
-    next_lines+=("$name: verify $verify / critique $critique -> scripts/review.sh $name")
+    next_lines+=("$name: verify $verify / critique $critique -> scripts/review.sh $name (then, if it looks overbuilt, scripts/trim.sh $name)")
   fi
 done
 
@@ -116,4 +123,5 @@ for line in "${next_lines[@]}"; do echo "  $line"; done
 echo
 echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes + VERIFY pass/skipped"
 echo "               + CRITIQUE run. Both gates filter; neither one approves."
-echo "AGENT ending in * ran on codex because the agy quota pool was empty at launch."
+echo "AGENT ending in @B ran on the second Antigravity account, because account A was at 0% when it was launched."
+echo "AGENT ending in * ran on codex because both Antigravity accounts were at 0% for its pool at launch."

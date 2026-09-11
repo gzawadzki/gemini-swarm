@@ -64,25 +64,53 @@ for i in $(seq 0 $((n_tasks - 1))); do
 
   # Antigravity quota runs down per pool and can reach 0% mid-swarm. An agent
   # that cannot make a single call looks exactly like one still thinking, so
-  # check the quota first and route the task to codex instead.
+  # check the quota first. When the live account has run dry, switch to the
+  # other one; when that is empty too, route the task to codex instead.
+  # HERDR_SWARM_NO_FALLBACK=1 turns the codex step off, and then the task is not
+  # launched at all.
   fallback_from=""
-  if [[ "$kind" == "agy" && "${HERDR_SWARM_NO_FALLBACK:-0}" != "1" ]]; then
-    quota_rc=0
-    agy_exhausted "$model" || quota_rc=$?
-    trace "$name" "quota.check" "$(agy_family_for_model "$model") -> rc=$quota_rc (0=empty 1=ok 2=unknown)"
-    case "$quota_rc" in
-      0)
-        echo "==> [$name] $(agy_family_for_model "$model") is at 0%. Running on codex $CODEX_FALLBACK_MODEL ($CODEX_FALLBACK_EFFORT) instead of agy ${model:-default}."
-        fallback_from="agy:${model:-default}"
-        kind="codex"
-        model="$CODEX_FALLBACK_MODEL"
-        effort="$CODEX_FALLBACK_EFFORT"
-        trace "$name" "kind.resolve" "codex $model / $effort (fallback from $fallback_from)"
+  account=""
+  if [[ "$kind" == "agy" ]]; then
+    was_live=$(account_live || echo "a")
+    pick_rc=0
+    account=$(agy_pick_account "$model") || pick_rc=$?
+    trace "$name" "quota.check" "$(agy_family_for_model "$model") -> account=${account:-none} rc=$pick_rc (0=ok 1=all empty 2=unknown 3=agents running 4=no switching)"
+    no_quota=""
+    case "$pick_rc" in
+      1)
+        # Covers both "the other account is empty too" and "there is no other
+        # account in the vault"; either way no agy account can run this task now.
+        no_quota="no Antigravity account has quota left for $(agy_family_for_model "$model")"
         ;;
       2)
-        echo "WARN: [$name] could not read the agy quota, so the task stays on agy. Check it by hand with: MSYS_NO_PATHCONV=1 agy -p /usage" >&2
+        echo "WARN: [$name] could not read the agy quota, so the task runs on the account that is live now. Check it by hand with: MSYS_NO_PATHCONV=1 agy -p /usage" >&2
+        ;;
+      3)
+        # Every agy process on this profile shares one credential, and a running
+        # agent rewrites it when its token refreshes. Switching now would change
+        # that agent's account and lose the credential we swapped in.
+        echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and the other account cannot be swapped in while agy is still running. Agents that already finished still hold the credential until their pane is closed: run scripts/cleanup.sh, then launch again. $(agy_reset_note "$model")" >&2
+        continue
+        ;;
+      4)
+        no_quota="account ${was_live} is at 0% for $(agy_family_for_model "$model") and HERDR_SWARM_NO_SWITCHING=1 forbids switching accounts"
         ;;
     esac
+    if [[ -n "$no_quota" ]]; then
+      if [[ "${HERDR_SWARM_NO_FALLBACK:-0}" == "1" ]]; then
+        echo "ERROR: [$name] $no_quota. Not launching. $(agy_reset_note "$model")" >&2
+        continue
+      fi
+      echo "==> [$name] $no_quota. Running on codex $CODEX_FALLBACK_MODEL ($CODEX_FALLBACK_EFFORT) instead of agy ${model:-default}."
+      fallback_from="agy:${model:-default}"
+      kind="codex"
+      model="$CODEX_FALLBACK_MODEL"
+      effort="$CODEX_FALLBACK_EFFORT"
+      account=""
+      trace "$name" "kind.resolve" "codex $model / $effort (fallback from $fallback_from)"
+    elif [[ "$account" != "$was_live" ]]; then
+      echo "==> [$name] account $was_live is at 0% for $(agy_family_for_model "$model"); switched the live credential to account $account."
+    fi
   fi
   [[ -n "$fallback_from" ]] || trace "$name" "kind.resolve" "$kind ${model:-default}${effort:+ / $effort} (no fallback)"
 
@@ -106,6 +134,8 @@ for i in $(seq 0 $((n_tasks - 1))); do
       trust_path="$repo"
       command -v cygpath >/dev/null 2>&1 && trust_path=$(cygpath -w "$repo")
       model_args+=(-c "projects.'${trust_path}'.trust_level=\"trusted\"")
+      mapfile -t plugin_args < <(codex_swarm_args)
+      model_args+=(${plugin_args[@]+"${plugin_args[@]}"})
       ;;
   esac
 
@@ -144,7 +174,18 @@ for i in $(seq 0 $((n_tasks - 1))); do
   fi
   trace "$name" "worktree.ready" "pane=$pane_id workspace=$workspace_id path=${worktree_path:-unresolved}"
 
-  echo "==> [$name] starting $kind agent in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
+  commit_note="Commit your changes as you go, with descriptive commit messages. Do not leave uncommitted changes at the end. Run 'git status' before finishing and commit or discard anything left over."
+
+  full_prompt="${prompt}
+
+${commit_note}
+
+When you are completely finished, write a JSON file to ${status_file} with the shape {\"status\": \"success\"|\"failure\", \"summary\": \"<short text>\", \"tests_passed\": true|false} as your very last action. Create parent directories if needed."
+
+  # Both accounts start the same way. Which subscription the agent draws on was
+  # decided above, by swapping the credential agy reads at start-up; nothing
+  # about the launch itself differs.
+  echo "==> [$name] starting $kind agent${account:+ on account $account} in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
   # One agent failing to start must not abandon the tasks after it, and it must
   # not leave an empty worktree behind either. Tear this one down and carry on.
   trace "$name" "agent.start" "kind=$kind pane=$pane_id timeout=$timeout_ms args: $autoflag ${model_args[*]-} ${extra_args[*]-}"
@@ -157,12 +198,6 @@ for i in $(seq 0 $((n_tasks - 1))); do
     continue
   fi
   trace "$name" "agent.start" "started"
-
-  full_prompt="${prompt}
-
-Commit your changes as you go, with descriptive commit messages. Do not leave uncommitted changes at the end. Run 'git status' before finishing and commit or discard anything left over.
-
-When you are completely finished, write a JSON file to ${status_file} with the shape {\"status\": \"success\"|\"failure\", \"summary\": \"<short text>\", \"tests_passed\": true|false} as your very last action. Create parent directories if needed."
 
   # `agent start` returns once the process exists, which is earlier than the TUI
   # accepting input. Prompting in that window loses the prompt without an error:
@@ -187,14 +222,14 @@ When you are completely finished, write a JSON file to ${status_file} with the s
   submit_prompt "$name" "$full_prompt" || echo "ERROR: [$name] prompt was not picked up; resend it by hand." >&2
 
   # An unset base is an empty string, not null, so `// "HEAD"` would not catch it.
-  jq -n --arg name "$name" --arg kind "$kind" --arg branch "$branch" \
+  jq -n --arg name "$name" --arg kind "$kind" --arg repo "$repo" --arg branch "$branch" \
         --arg base "${base:-HEAD}" --arg base_sha "$base_sha" \
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
-        --arg model "$model" --arg effort "$effort" --arg fallback_from "$fallback_from" \
-        --arg verify "$verify" --arg prompt "$prompt" \
-    '{name: $name, kind: $kind, branch: $branch, base: $base, base_sha: $base_sha,
-      model: $model, effort: $effort, fallback_from: $fallback_from,
+        --arg model "$model" --arg effort "$effort" --arg account "$account" \
+        --arg fallback_from "$fallback_from" --arg verify "$verify" --arg prompt "$prompt" \
+    '{name: $name, kind: $kind, repo: $repo, branch: $branch, base: $base, base_sha: $base_sha,
+      model: $model, effort: $effort, account: $account, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
       worktree_path: $worktree_path, status_file: $status_file, verify: $verify,
       prompt: $prompt}' \

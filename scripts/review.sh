@@ -24,6 +24,7 @@ base=$(jq -r '.base' <<<"$entry")
 kind=$(jq -r '.kind // "?"' <<<"$entry")
 model=$(jq -r '.model // ""' <<<"$entry")
 effort=$(jq -r '.effort // ""' <<<"$entry")
+account=$(jq -r '.account // "a"' <<<"$entry")
 fallback_from=$(jq -r '.fallback_from // ""' <<<"$entry")
 workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
 worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
@@ -67,7 +68,9 @@ trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict ba
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
 if [[ -n "$fallback_from" ]]; then
-  echo "fallback:  ran on codex instead of $fallback_from, because the agy quota pool read 0% at launch"
+  echo "fallback:  ran on codex instead of $fallback_from, because no Antigravity account had quota for that pool at launch"
+elif [[ -n "$account" && "$account" != "a" ]]; then
+  echo "account:   ${account^^} (the other Antigravity subscription; account A was at 0% at launch)"
 fi
 echo "verify:    $verify_status${verify_cmd:+ ($verify_cmd)}"
 if [[ "$verify_status" == "not run" ]]; then
@@ -83,6 +86,11 @@ esac
 if [[ -n "$critique_summary" ]]; then echo "           $critique_summary"; fi
 if [[ "$(jq 'length' <<<"$critique_issues")" -gt 0 ]]; then
   jq -r '.[] | "           [\(.severity // "?")] \(.file // "?"): \(.note // "")"' <<<"$critique_issues"
+fi
+trim_file=$(trim_file_for "$NAME")
+if [[ -f "$trim_file" ]]; then
+  echo "trim:      $(jq -r '"\(.status // "?") (\(.cuts // [] | length) suggested cuts, advisory)"' "$trim_file" 2>/dev/null || echo "?")"
+  jq -r '.cuts // [] | .[] | "           - \(.file // "?"): \(.what // "")"' "$trim_file" 2>/dev/null || true
 fi
 echo "branch:    $branch"
 echo "base:      $base (resolved: ${base_ref:0:12})"

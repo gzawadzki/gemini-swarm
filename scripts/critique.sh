@@ -34,6 +34,7 @@ entry=$(jq -c --arg name "$NAME" '.[] | select(.name == $name)' "$STATE_FILE")
 workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
 worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 task_prompt=$(jq -r '.prompt // empty' <<<"$entry")
+worker_model=$(jq -r '.model // empty' <<<"$entry")
 
 [[ -n "$worktree_path" && -d "$worktree_path" ]] || {
   echo "ERROR: worktree path unknown or missing for '$NAME' (got: '$worktree_path')." >&2
@@ -51,16 +52,23 @@ reply_file="${critique_file%.json}.reply.txt"
 
 critique_kind=""
 confidence=""
+reviewer_model=$(critique_model_for "$worker_model")
+[[ "$reviewer_model" == "$CRITIQUE_MODEL" ]] \
+  || trace "$NAME" "reviewer.model" "task was written by $worker_model, reviewing on $reviewer_model instead"
 
 # Every exit path leaves a verdict file behind, so status.sh always has an
 # answer to show and never re-runs a critique that already happened.
 write_verdict() {  # verdict  summary  issues-json
   local issues="${3:-[]}"
   jq -e . >/dev/null 2>&1 <<<"$issues" || issues='[]'
+  local independent=true
+  [[ -n "$worker_model" && "$reviewer_model" == "$worker_model" ]] && independent=false
   jq -n --arg verdict "$1" --arg summary "$2" --argjson issues "$issues" \
-        --arg model "$CRITIQUE_MODEL" --arg kind "$critique_kind" \
+        --arg model "$reviewer_model" --arg kind "$critique_kind" \
+        --arg worker_model "$worker_model" --argjson independent "$independent" \
         --arg confidence "$confidence" --arg ts "$(date -u +%FT%TZ)" \
     '{verdict: $verdict, confidence: $confidence, model: $model, kind: $kind,
+      worker_model: $worker_model, independent: $independent,
       issues: $issues, summary: $summary, ran_at: $ts}' > "$critique_file"
   trace "$NAME" "verdict.write" "$1${confidence:+ (confidence: $confidence)} -> $critique_file"
 }
@@ -175,8 +183,8 @@ instruction="Read the code review brief at ${brief_arg} and follow it exactly. O
 
 # --- Pick a pool and run it -------------------------------------------------
 
-critique_kind=$(critique_kind_for "$CRITIQUE_MODEL")
-trace "$NAME" "reviewer.pick" "${critique_kind:-<none>} for model $CRITIQUE_MODEL"
+critique_kind=$(critique_kind_for "$reviewer_model")
+trace "$NAME" "reviewer.pick" "${critique_kind:-<none>} for model $reviewer_model"
 if [[ -z "$critique_kind" ]]; then
   echo "=== $NAME: critique SKIPPED ==="
   echo "No agy, codex or gemini binary on PATH, so nothing can run the review." >&2
@@ -194,23 +202,26 @@ cmd=()
 reviewer_label="$critique_kind"
 case "$critique_kind" in
   agy)
-    cmd=(agy -p "$instruction" "$autoflag" --model "$CRITIQUE_MODEL")
-    reviewer_label="agy / $CRITIQUE_MODEL"
+    cmd=(agy -p "$instruction" "$autoflag" --model "$reviewer_model")
+    reviewer_label="agy / $reviewer_model"
     ;;
   codex)
     # codex exec is the non-interactive mode. The trust override is the same one
     # launch.sh needs: without it codex asks whether it trusts the directory and
-    # waits forever, which the bypass flag does not cover.
-    cmd=(codex exec "$autoflag"
+    # waits forever, which the bypass flag does not cover. Plugins are off for
+    # the same reason as in launch.sh: the reply has to parse as JSON.
+    mapfile -t plugin_args < <(codex_swarm_args)
+    cmd=(codex exec "$autoflag" ${plugin_args[@]+"${plugin_args[@]}"}
          --model "$CODEX_FALLBACK_MODEL"
          -c "model_reasoning_effort=\"$CRITIQUE_EFFORT\""
          -c "projects.'${trust_path}'.trust_level=\"trusted\""
          "$instruction")
+    reviewer_model="$CODEX_FALLBACK_MODEL"
     reviewer_label="codex / $CODEX_FALLBACK_MODEL"
     ;;
   gemini)
-    # Classic gemini CLI has no model menu, so CRITIQUE_MODEL is recorded in the
-    # verdict file for the record but not applied here.
+    # Classic gemini CLI has no model menu, so the reviewer model is recorded in
+    # the verdict file for the record but not applied here.
     cmd=(gemini -p "$instruction" "$autoflag")
     reviewer_label="gemini / default"
     ;;
@@ -218,6 +229,13 @@ esac
 
 echo "=== $NAME: critique ==="
 echo "reviewer:  $reviewer_label"
+if [[ -n "$worker_model" && "$reviewer_model" == "$worker_model" ]]; then
+  # Only reachable when the Gemini pool was empty and the codex fallback task is
+  # now being reviewed by codex too. Say so rather than pretend it is independent.
+  echo "WARNING:   the reviewer is the same model that wrote this diff ($worker_model)."
+  echo "           Weigh a pass accordingly; it is not an independent review."
+  trace "$NAME" "reviewer.model" "not independent: reviewer and worker are both $worker_model"
+fi
 echo "worktree:  $worktree_path"
 echo "base:      ${base_ref:0:12}"
 echo "brief:     $brief_file"
