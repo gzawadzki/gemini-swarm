@@ -113,7 +113,7 @@ for i in $(seq 0 $((n - 1))); do
   else
     # Both halves of the gate are behind it: pass, skipped, or the critique
     # itself failed to produce an answer. Either way the next step is your read.
-    next_lines+=("$name: verify $verify / critique $critique -> scripts/review.sh $name")
+    next_lines+=("$name: verify $verify / critique $critique -> scripts/review.sh $name (then, if it looks overbuilt, scripts/trim.sh $name)")
   fi
 done
 

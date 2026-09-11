@@ -486,6 +486,18 @@ task_state() {
 CODEX_FALLBACK_MODEL="${HERDR_SWARM_CODEX_MODEL:-gpt-5.6-luna}"
 CODEX_FALLBACK_EFFORT="${HERDR_SWARM_CODEX_EFFORT:-xhigh}"
 
+# Extra arguments for every codex the swarm starts. User plugins such as caveman
+# inject SessionStart hooks that change how the model writes, which is fine in a
+# person's own session and wrong in a worker whose result file and commit
+# messages another model has to parse. Per-plugin `-c plugins."x".enabled=false`
+# overrides were measured to leave the rendered prompt unchanged, so this turns
+# the plugin system off for the run instead. It does not touch
+# ~/.codex/config.toml, and it does not stop ~/.codex/AGENTS.md from loading.
+# HERDR_SWARM_CODEX_PLUGINS=1 keeps plugins on.
+codex_swarm_args() {
+  [[ "${HERDR_SWARM_CODEX_PLUGINS:-0}" == "1" ]] || printf '%s\n' --disable plugins
+}
+
 # --- Egress verification gate -----------------------------------------------
 #
 # The review step is the only thing between an auto-approving agent and the
@@ -555,6 +567,21 @@ CRITIQUE_MODEL="${HERDR_SWARM_CRITIQUE_MODEL:-gemini-3.8-flash-high}"
 CRITIQUE_EFFORT="${HERDR_SWARM_CRITIQUE_EFFORT:-medium}"
 CRITIQUE_TIMEOUT="${HERDR_SWARM_CRITIQUE_TIMEOUT:-600}"
 
+# A model reviewing its own output shares its own blind spots, so a task that
+# was written by CRITIQUE_MODEL is reviewed by this one instead. It stays on the
+# Gemini pool so the swap costs no Claude/GPT quota.
+CRITIQUE_ALT_MODEL="${HERDR_SWARM_CRITIQUE_ALT_MODEL:-gemini-3.1-pro-high}"
+
+# The reviewer model for a task written by $1. Prints CRITIQUE_MODEL unless that
+# is the worker's own model, in which case it prints CRITIQUE_ALT_MODEL.
+critique_model_for() {
+  if [[ -n "$1" && "$1" == "$CRITIQUE_MODEL" ]]; then
+    printf '%s' "$CRITIQUE_ALT_MODEL"
+  else
+    printf '%s' "$CRITIQUE_MODEL"
+  fi
+}
+
 # Diffs are pasted into the brief, and a giant one both blows the prompt budget
 # and buries the signal. Past this many lines the brief is truncated and the
 # reviewer is told to read the repo itself, which it has open anyway.
@@ -581,6 +608,23 @@ critique_kind_for() {
   fi
   command -v codex  >/dev/null 2>&1 && { printf 'codex';  return; }
   command -v gemini >/dev/null 2>&1 && { printf 'gemini'; return; }
+}
+
+# --- Trim review, on demand ---------------------------------------------------
+#
+# A separate, optional pass after review.sh: a cheap model reads the diff only
+# for overengineering (speculative abstraction, unused options, needless layers,
+# dead code) and suggests cuts. It is advice for the orchestrator, never a gate.
+# It does not judge correctness, never blocks, and never edits the worktree.
+# Running YAGNI as an always-on filter makes agents cut corners that matter, so
+# it lives here, after the correctness review, and only when someone asks.
+
+TRIM_MODEL="${HERDR_SWARM_TRIM_MODEL:-$CRITIQUE_MODEL}"
+TRIM_TIMEOUT="${HERDR_SWARM_TRIM_TIMEOUT:-$CRITIQUE_TIMEOUT}"
+
+# Path where trim.sh caches a task's suggestions, read back by review.sh.
+trim_file_for() {
+  printf '%s/%s.trim.json' "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}" "$1"
 }
 
 # Pull the first complete JSON object out of a model's reply. Models wrap JSON

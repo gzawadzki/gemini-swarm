@@ -163,6 +163,7 @@ out=$(FAKE_GEM_5H_A=0 FAKE_GEM_5H_B=0 FAKE_VAULT_B=full FAKE_SWITCH_RC=0 run_lau
 grepok "announces the fallback"           "Running on codex"                    "$out"
 grepok "starts codex, no account"         "starting codex agent in pane"        "$out"
 grepok "codex started through herdr"      "agent start t1 --kind codex"         "$(cat "$HERDR_CALL_LOG")"
+grepok "codex plugins are switched off"   "\-\-disable plugins"                 "$(cat "$HERDR_CALL_LOG")"
 check  "state.json records the fallback" "agy:gemini-3.1-pro-high" "$(jq -r '.[0].fallback_from' "$LAST_STATE_DIR/state.json")"
 check  "state.json kind is codex" "codex" "$(jq -r '.[0].kind' "$LAST_STATE_DIR/state.json")"
 check  "state.json account is empty" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"

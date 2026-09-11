@@ -263,7 +263,8 @@ Pipeline, in order:
    straight back to the agent (step 7) instead of reading the diff.
 5. **Then run the machine critique**, `scripts/critique.sh <name>`. A cheap model
    on the swarm pool reads the diff against the task's own prompt and answers the
-   question verify cannot: is this the change that was asked for. `revise` and
+   question verify cannot: is this the change that was asked for. The reviewer is
+   never the model that wrote the diff when that can be avoided (section 9). `revise` and
    `reject` go back to the agent (step 7) with the issues attached, again without
    costing you a read. Only `pass`, `skipped` and a failed critique reach step 6.
 6. **Read the diff yourself before touching the user's branch.** Do not trust the
@@ -272,7 +273,9 @@ Pipeline, in order:
    `git log <base>.. --oneline` and the actual `git diff <base>...` for the task's
    worktree. The gate decides which diffs are worth reading; it never decides that
    a diff does not need reading. An unreviewed diff from a model with no
-   confirmation gate is the failure mode to guard against.
+   confirmation gate is the failure mode to guard against. Only after that, and
+   only when the diff looks bigger than the task, run the optional trim review
+   (section 10): it suggests cuts, it never gates.
 7. **Send fixes back to the same agent** with
    `herdr agent prompt <name> "<specific fix>" --wait` rather than rewriting the
    code yourself, since it already has the context. A verify failure is the
@@ -302,7 +305,8 @@ Pipeline, in order:
    - Remove that task's entry, result file, logs and gate artifacts from
      `.herdr-swarm` (`<name>.result.json`, `<name>.verify.json`,
      `<name>.verify.log`, `<name>.critique.json`, `<name>.critique.brief.md`,
-     `<name>.critique.reply.txt`). Remove the directory only when no active task
+     `<name>.critique.reply.txt`, `<name>.trim.json`, `<name>.trim.brief.md`,
+     `<name>.trim.reply.txt`). Remove the directory only when no active task
      still uses it; preserve shared state for workers that are still running.
    - Verify the cleanup: the task is absent from `herdr workspace list`, its path
      is absent from `git worktree list`, its disposable branch is absent from
@@ -501,6 +505,22 @@ classic `gemini`, the same way `launch.sh` does. Override with
 600) and `HERDR_SWARM_CRITIQUE_DIFF_LINES` (default 1500, past which the diff in
 the brief is truncated and the reviewer is told to read the repo itself).
 
+**The reviewer is a different model from the author.** A model grading its own
+output shares its own blind spots. When the task's `model` in `state.json` is the
+critique model, `critique.sh` reviews on `HERDR_SWARM_CRITIQUE_ALT_MODEL` instead
+(default `gemini-3.1-pro-high`, still on the Gemini pool). The verdict file
+records `worker_model` and `independent`. The one case this cannot avoid is a
+codex fallback task critiqued by codex while the Gemini pool is empty; the script
+prints a warning and writes `"independent": false`. Tell the user when that
+happens, and weigh that `pass` as the self-review it is.
+
+Every codex the swarm starts, worker or reviewer, runs with `--disable plugins`,
+so user plugins such as caveman cannot inject a SessionStart hook that changes
+how it writes the result file, commit messages or the verdict JSON. Per-plugin
+`-c plugins."x".enabled=false` overrides do not work for this; they were measured
+to leave the prompt unchanged. `~/.codex/AGENTS.md` still loads. Set
+`HERDR_SWARM_CODEX_PLUGINS=1` to keep plugins on.
+
 The critique is a filter, never an approval. See the safety notes.
 
 ## 10. Review before merging
@@ -520,6 +540,27 @@ what makes auto-approve acceptable in the first place. Then follow section 4
 steps 7 to 9: fix by re-prompting if needed, at most twice, present the result and
 ask the user how to merge, and once they decide, clean up the agents, workspace,
 branch and scratch state and verify that the cleanup actually happened.
+
+### Optional: trim review, after your read
+
+```bash
+scripts/trim.sh <task-name>
+```
+
+Run this on demand, when a diff that already passed the critique and your own
+read looks bigger than the task needed. A cheap model (`HERDR_SWARM_TRIM_MODEL`,
+default the critique model) reads the diff for overengineering only: single-use
+abstractions, options nobody sets, generalisation the task did not ask for,
+re-implemented helpers, dead code. It writes suggested cuts to
+`.herdr-swarm/<name>.trim.json`, and `review.sh` lists them afterwards.
+
+It is advice, not a gate. It always exits 0, never judges correctness or safety,
+never edits the worktree, and is told not to cut input validation, I/O error
+handling or tests. Order matters: correctness first (verify, critique, your
+read), trimming second, commit last. Do not run YAGNI as an always-on filter;
+applied to every task it pushes agents into cutting corners that matter. Take
+the cuts you agree with back to the agent (section 4 step 7), re-run `verify.sh`,
+and ignore the rest.
 
 ## 11. Close the agents
 
@@ -589,7 +630,7 @@ review gate. It is append-only; delete it yourself when it gets long.
 2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
 ```
 
-The source tags are `launch`, `status`, `verify`, `critiq`, `review` and `logs`.
+The source tags are `launch`, `status`, `verify`, `critiq`, `trim`, `review` and `logs`.
 A task column of `-` means the event belongs to the run rather than one task.
 The events worth knowing:
 
@@ -598,7 +639,8 @@ The events worth knowing:
 | `launch` | `run.start`, `quota.check`, `kind.resolve` (which model and whether it fell back), `base.pin`, `herdr.exec`, `worktree.ready`, `agent.start`, `agent.ready`, `prompt.submit` / `prompt.landed` / `prompt.stalled` / `prompt.lost`, `state.write`, `run.end` |
 | `status` | `poll`, one compact line per task |
 | `verify` | `cmd.resolve` (the command and whether it came from `tasks.json` or auto-detection), `cmd.exec` |
-| `critiq` | `base.resolve`, `diff.collect`, `quota.read`, `reviewer.pick`, `reviewer.exec`, `verdict.parse`, `verdict.write` |
+| `critiq` | `base.resolve`, `diff.collect`, `quota.read`, `reviewer.model` (swapped to the alternate, or not independent), `reviewer.pick`, `reviewer.exec`, `verdict.parse`, `verdict.write` |
+| `trim` | `base.resolve`, `diff.collect`, `quota.read`, `reviewer.pick`, `reviewer.exec`, `trim.write` |
 | `review` | `base.resolve`, `review.read` |
 | `logs` | `herdr.exec` |
 
@@ -642,6 +684,9 @@ you extend the tracing: the log is meant to stay safe to paste into a chat.
   passed, the critique passed, or a status file says success.
 - Treat a critique `reject` as information, not authority, in the other direction
   too. It can be wrong. Read the diff before you throw work away on its say-so.
+- A trim suggestion is not a finding. Never apply cuts without reading them, never
+  let one remove validation, error handling or tests, and never run trim in place
+  of the correctness review.
 - Report when a task fell back to codex. The user picked a model for a reason, and
   a security review done by `gpt-5.6-luna` instead of `claude-opus-4-6-thinking`
   is a different piece of work.

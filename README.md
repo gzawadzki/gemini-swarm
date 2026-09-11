@@ -107,6 +107,14 @@ scripts/critique.sh <task-name>
 scripts/review.sh <task-name>
 ```
 
+Optionally, once you have read it and it looks bigger than the task needed, ask a
+cheap model where it is overbuilt. This only suggests cuts; it never blocks and
+never judges correctness. See [Trim review](#trim-review):
+
+```bash
+scripts/trim.sh <task-name>
+```
+
 **7. Read an agent's output** when something looks wrong:
 
 ```bash
@@ -186,13 +194,40 @@ CRITIQUE column of `status.sh` and at the top of `review.sh`.
 another model's work, which is weaker evidence than the test run, not stronger.
 It narrows what you have to read; it does not replace reading it.
 
+The reviewer is never the model that wrote the diff when that can be avoided: a
+task written by the critique model is reviewed by
+`HERDR_SWARM_CRITIQUE_ALT_MODEL` instead. The verdict file records
+`worker_model` and `independent`; the one unavoidable self-review, a codex
+fallback task critiqued by codex, prints a warning and writes
+`"independent": false`.
+
 | Variable | Effect |
 |----------|--------|
 | `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.8-flash-high`. |
+| `HERDR_SWARM_CRITIQUE_ALT_MODEL` | Reviewer for tasks the critique model wrote itself, default `gemini-3.1-pro-high`. |
 | `HERDR_SWARM_CRITIQUE_KIND` | Force `agy`, `codex` or `gemini` instead of auto-picking. |
 | `HERDR_SWARM_CRITIQUE_EFFORT` | Reasoning effort for the codex path, default `medium`. |
 | `HERDR_SWARM_CRITIQUE_TIMEOUT` | Seconds before the reviewer is killed, default `600`. |
 | `HERDR_SWARM_CRITIQUE_DIFF_LINES` | Diff lines pasted into the brief, default `1500`. Past this the brief is truncated and the reviewer is told to read the repo itself. |
+
+## Trim review
+
+`trim.sh` is an optional pass after your own read, for diffs that look bigger
+than the task. A cheap model reads the diff for overengineering only —
+single-use abstractions, unused options, needless generalisation, re-implemented
+helpers, dead code — and writes suggested cuts to `.herdr-swarm/<name>.trim.json`,
+which `review.sh` then lists.
+
+It always exits 0, never judges correctness or safety, never edits the worktree,
+and is told to leave input validation, I/O error handling and tests alone. It is
+not part of the gate on purpose: YAGNI applied to every task makes agents cut
+corners that matter. Correctness first, trimming second, commit last.
+
+| Variable | Effect |
+|----------|--------|
+| `HERDR_SWARM_TRIM_MODEL` | Model for the trim pass, default the critique model. |
+| `HERDR_SWARM_TRIM_KIND` | Force `agy`, `codex` or `gemini`. |
+| `HERDR_SWARM_TRIM_TIMEOUT` | Seconds before it is killed, default the critique timeout. |
 
 ## Quota: two Antigravity accounts, then codex
 
@@ -219,6 +254,7 @@ actually did the work.
 | `HERDR_SWARM_NO_FALLBACK=1` | Never fall back to codex; when no account has quota the task is not launched and the script reports when each account refills. |
 | `HERDR_SWARM_CODEX_MODEL` | Model the fallback runs, default `gpt-5.6-luna`. |
 | `HERDR_SWARM_CODEX_EFFORT` | Reasoning effort, default `xhigh`. |
+| `HERDR_SWARM_CODEX_PLUGINS=1` | Keep codex plugins on. By default every swarm codex runs with `--disable plugins`, so plugins like caveman cannot rewrite how a worker or reviewer writes. `~/.codex/AGENTS.md` still loads. |
 
 Only the live account's quota can be read, because `/usage` answers for whoever
 `agy` is signed in as. The other account is therefore consulted only after the

@@ -134,6 +134,8 @@ for i in $(seq 0 $((n_tasks - 1))); do
       trust_path="$repo"
       command -v cygpath >/dev/null 2>&1 && trust_path=$(cygpath -w "$repo")
       model_args+=(-c "projects.'${trust_path}'.trust_level=\"trusted\"")
+      mapfile -t plugin_args < <(codex_swarm_args)
+      model_args+=(${plugin_args[@]+"${plugin_args[@]}"})
       ;;
   esac
 

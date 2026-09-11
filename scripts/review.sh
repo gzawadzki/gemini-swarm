@@ -87,6 +87,11 @@ if [[ -n "$critique_summary" ]]; then echo "           $critique_summary"; fi
 if [[ "$(jq 'length' <<<"$critique_issues")" -gt 0 ]]; then
   jq -r '.[] | "           [\(.severity // "?")] \(.file // "?"): \(.note // "")"' <<<"$critique_issues"
 fi
+trim_file=$(trim_file_for "$NAME")
+if [[ -f "$trim_file" ]]; then
+  echo "trim:      $(jq -r '"\(.status // "?") (\(.cuts // [] | length) suggested cuts, advisory)"' "$trim_file" 2>/dev/null || echo "?")"
+  jq -r '.cuts // [] | .[] | "           - \(.file // "?"): \(.what // "")"' "$trim_file" 2>/dev/null || true
+fi
 echo "branch:    $branch"
 echo "base:      $base (resolved: ${base_ref:0:12})"
 echo "worktree:  $worktree_path"
