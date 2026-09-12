@@ -34,12 +34,20 @@ cmd=$(resolve_verify_cmd "$verify_from_task" "$worktree_path")
 verify_file=$(verify_file_for "$NAME")
 log_file="${verify_file%.json}.log"
 
+# Every result says what was established about resolution. The paths that never
+# ask - no command to run, or a command that failed - say exactly that, because
+# an empty field reads like an answer.
+SOUNDNESS="not checked"
+SOUNDNESS_DETAIL="the verify command did not pass, so where the code resolved from was not asked"
+
 trace "$NAME" "cmd.resolve" \
   "${cmd:-<none>} (source: $([[ -n "$verify_from_task" ]] && echo "tasks.json" || echo "detected from $worktree_path"))"
 
 write_result() {  # status  cmd
   jq -n --arg status "$1" --arg cmd "$2" --arg ts "$(date -u +%FT%TZ)" \
-    '{status: $status, cmd: $cmd, ran_at: $ts}' > "$verify_file"
+        --arg soundness "${SOUNDNESS:-}" --arg soundness_detail "${SOUNDNESS_DETAIL:-}" \
+    '{status: $status, cmd: $cmd, soundness: $soundness,
+      soundness_detail: $soundness_detail, ran_at: $ts}' > "$verify_file"
 }
 
 if [[ -z "$cmd" ]]; then
@@ -68,9 +76,54 @@ echo "---------------------"
 trace "$NAME" "cmd.exec" "rc=$rc ($([[ "$rc" -eq 0 ]] && echo pass || echo fail)), output in $log_file"
 
 if [[ "$rc" -eq 0 ]]; then
-  echo "VERIFY PASS ($cmd)"
-  write_result "pass" "$cmd"
-  echo "Next: scripts/critique.sh $NAME"
+  # The command passed. Whether it passed on this worktree's code is a separate
+  # question, and the one an editable install gets wrong.
+  if [[ "${HERDR_SWARM_NO_SOUNDNESS:-0}" == "1" ]]; then
+    SOUNDNESS="disabled"
+    SOUNDNESS_DETAIL="HERDR_SWARM_NO_SOUNDNESS=1"
+    echo "VERIFY PASS ($cmd)"
+    echo "Where the code under test resolved from was NOT checked: HERDR_SWARM_NO_SOUNDNESS=1."
+    write_result "pass" "$cmd"
+    trace "$NAME" "soundness" "disabled by HERDR_SWARM_NO_SOUNDNESS"
+    echo "Next: scripts/critique.sh $NAME"
+  else
+    check_verify_soundness "$worktree_path"
+    trace "$NAME" "soundness" "$SOUNDNESS: $SOUNDNESS_DETAIL"
+    case "$SOUNDNESS" in
+      sound)
+        echo "VERIFY PASS ($cmd)"
+        echo "Resolution: $SOUNDNESS_DETAIL"
+        write_result "pass" "$cmd"
+        echo "Next: scripts/critique.sh $NAME"
+        ;;
+      unsound)
+        # The suite was green on code from somewhere else. Reported as a failure
+        # rather than a warning: a gate that silently tested the wrong tree is
+        # worse than no gate, because it is counted as evidence.
+        echo "VERIFY FAIL (resolved outside the worktree): $cmd"
+        echo "The verify command itself passed. The code it exercised did not come"
+        echo "from this task's worktree:"
+        echo "  $SOUNDNESS_DETAIL"
+        echo "That is an editable install pinning imports to another checkout, not a"
+        echo "broken test suite. Fix the environment, not the diff: reinstall inside"
+        echo "the worktree, or set a pythonpath for it, then rerun."
+        write_result "fail" "$cmd"
+        echo "Full output: $log_file"
+        rc=1
+        ;;
+      *)
+        # "I could not tell" must never render as a pass.
+        echo "VERIFY SKIPPED (soundness unknown): $cmd"
+        echo "The verify command itself passed, but where the code under test resolved"
+        echo "from could not be established:"
+        echo "  $SOUNDNESS_DETAIL"
+        echo "Nothing is proven about which tree was exercised, so this is not a pass."
+        echo "Set HERDR_SWARM_NO_SOUNDNESS=1 if the check makes no sense for this project."
+        write_result "skipped" "$cmd"
+        echo "Next: scripts/critique.sh $NAME"
+        ;;
+    esac
+  fi
 else
   echo "VERIFY FAIL (exit $rc): $cmd"
   write_result "fail" "$cmd"

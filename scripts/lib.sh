@@ -570,6 +570,81 @@ detect_verify_cmd() {
 }
 
 # The verify command for a task: its explicit `verify` field, else detection.
+# --- Verify soundness --------------------------------------------------------
+#
+# A green verify means nothing unless the code it exercised came from the task's
+# own worktree. An editable install pins imports to a fixed path, so a suite run
+# inside a worktree can import the package from the main checkout and pass on a
+# diff it never touched. That happened: one project was saved by a `pythonpath`
+# line in its config, by accident rather than design.
+#
+# Sets SOUNDNESS to one of:
+#   sound    the module under test resolved inside the worktree
+#   unsound  it resolved somewhere else, and SOUNDNESS_DETAIL says where
+#   unknown  this project's resolution could not be established at all
+# and SOUNDNESS_DETAIL to a sentence naming what was found.
+#
+# `unknown` is deliberately common. The mechanism below covers Python, which is
+# the only ecosystem where the trap has actually been observed; everywhere else
+# the honest answer is that nothing was established, and the caller must not
+# turn that into a pass. Widening it means adding a positive check per
+# ecosystem, never assuming soundness because a language looks safe.
+check_verify_soundness() {  # <worktree>
+  local worktree="$1"
+  SOUNDNESS="unknown"
+  SOUNDNESS_DETAIL=""
+
+  local pyproject="$worktree/pyproject.toml"
+  if [[ ! -f "$pyproject" ]]; then
+    SOUNDNESS_DETAIL="no pyproject.toml in the worktree, and only Python resolution can be checked so far"
+    return 0
+  fi
+  if ! command -v python >/dev/null 2>&1; then
+    SOUNDNESS_DETAIL="no python on PATH to ask where the package resolves from"
+    return 0
+  fi
+
+  # The distribution name, turned into the module name the way packaging does.
+  local module
+  module=$(sed -n 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$pyproject" | head -1)
+  module=${module//-/_}
+  module=${module//./_}
+  if [[ -z "$module" ]]; then
+    SOUNDNESS_DETAIL="pyproject.toml declares no project name, so there is no module to resolve"
+    return 0
+  fi
+
+  # find_spec rather than import: it answers the same question without running
+  # the package's import side effects inside the gate.
+  local origin
+  origin=$(cd "$worktree" && python -c \
+    "import importlib.util as u
+s = u.find_spec('$module')
+print(s.origin if s and s.origin else '')" 2>/dev/null) || origin=""
+  origin=${origin%$'\r'}
+  if [[ -z "$origin" ]]; then
+    SOUNDNESS_DETAIL="module '$module' could not be resolved, so where the tests imported it from is unknown"
+    return 0
+  fi
+
+  # python is a native binary here and answers with a native path, while the
+  # worktree is an MSYS one. Compare both in the same form, case-insensitively,
+  # because Windows paths differ in case without differing.
+  local wt_native="$worktree"
+  command -v cygpath >/dev/null 2>&1 && wt_native=$(cygpath -m "$worktree" 2>/dev/null || echo "$worktree")
+  origin=${origin//\\//}
+  wt_native=${wt_native//\\//}
+  wt_native=${wt_native%/}
+  if [[ "${origin,,}" == "${wt_native,,}/"* ]]; then
+    SOUNDNESS="sound"
+    SOUNDNESS_DETAIL="module '$module' resolved to $origin, inside the worktree"
+  else
+    SOUNDNESS="unsound"
+    SOUNDNESS_DETAIL="module '$module' resolved to $origin, which is outside the worktree $wt_native"
+  fi
+  return 0
+}
+
 resolve_verify_cmd() {
   local from_task="$1" worktree="$2"
   if [[ -n "$from_task" && "$from_task" != "null" ]]; then

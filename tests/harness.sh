@@ -175,6 +175,20 @@ fi
 FAKE
 }
 
+# python: stands in for the interpreter the soundness check interrogates. It
+# answers with $FAKE_PY_ORIGIN, which is where the module under test resolved
+# from - inside the worktree on a sound run, in the main checkout on the
+# editable-install trap this check exists to catch. An empty value is a module
+# that could not be resolved at all.
+_harness_fake_python() {
+  cat > "$BIN/python" <<'FAKE'
+#!/usr/bin/env bash
+echo "python $*" >> "$CALL_LOG"
+printf '%s
+' "${FAKE_PY_ORIGIN:-}"
+FAKE
+}
+
 _harness_fake_codex() {
   cat > "$BIN/codex" <<'FAKE'
 #!/usr/bin/env bash

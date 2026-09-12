@@ -102,7 +102,11 @@ scripts/status.sh
 
 **4. Verify** — the deterministic half of the egress gate. It runs the task's
 `verify` command (or an auto-detected one) inside the worktree, so mechanical
-failures never reach the review:
+failures never reach the review. A green command is not the whole answer: it then
+establishes that the code under test resolved inside the worktree, because an
+editable install can pin imports to the main checkout and pass on a diff it never
+touched. Resolved elsewhere is a `fail`; undeterminable is `skipped`, never a
+`pass`. `HERDR_SWARM_NO_SOUNDNESS=1` turns the check off, visibly:
 
 ```bash
 scripts/verify.sh <task-name>

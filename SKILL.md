@@ -525,12 +525,34 @@ This runs the task's `verify` command inside its worktree, or an auto-detected
 test/build command when the task set none, and caches the result so `status.sh`
 can show it. `pass` and `skipped` move the task on to the critique; `fail` sends
 it back to the agent instead (section 4 step 7), and you never spend tokens
-reading a diff that does not build. `skipped` means no check could be found —
-treat that diff with the extra care of an unverified one.
+reading a diff that does not build. `skipped` means nothing was proven — treat
+that diff with the extra care of an unverified one.
+
+**A green command is not yet a pass.** After the command succeeds, verify asks
+where the code under test actually resolved from, because an editable install
+pins imports to a fixed path: a suite run inside a worktree can import the
+package from the main checkout and go green on a diff it never touched. That
+happened here, and one project's `pythonpath` line saved it by accident. A gate
+that can test the wrong tree is worse than no gate, because it is counted as
+evidence.
+
+| resolution | status | meaning |
+|------------|--------|---------|
+| inside the worktree | `pass` | the tests ran on this task's code |
+| outside it | `fail` | naming the module and the path, so an editable install is not mistaken for a broken suite. **Do not re-prompt the agent**: the diff may be fine and the environment is what lied |
+| could not be established | `skipped` | the command passed, but which tree ran it is unproven, so it is not a pass |
+| not checked | `pass` | only with `HERDR_SWARM_NO_SOUNDNESS=1`, and the result records `"soundness": "disabled"` |
+
+The mechanism is provisional and deliberately narrow: it resolves the module
+named by `pyproject.toml` and checks the path. Only Python is in evidence, so
+every other project reports `skipped` rather than assuming soundness. Widening it
+means adding a positive check per ecosystem — never treating a language as safe
+because the trap has not been seen there yet. The requirement is the guarantee,
+not the technique.
 
 This is the deterministic half of "verify at egress". It is what lets the swarm
 run wide without you hand-checking every mechanical failure. It answers "does it
-still build", and nothing else.
+still build, on this worktree's code", and nothing else.
 
 ## 9. Critique: the judgement half of the gate
 

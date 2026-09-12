@@ -44,9 +44,13 @@ base_ref=$(resolve_base_ref "$entry" "$worktree_path") || {
 verify_file=$(verify_file_for "$NAME")
 verify_status="not run"
 verify_cmd=""
+verify_soundness=""
+verify_soundness_detail=""
 if [[ -f "$verify_file" ]]; then
   verify_status=$(jq -r '.status // "?"' "$verify_file" 2>/dev/null || echo "?")
   verify_cmd=$(jq -r '.cmd // ""' "$verify_file" 2>/dev/null || echo "")
+  verify_soundness=$(jq -r '.soundness // ""' "$verify_file" 2>/dev/null || echo "")
+  verify_soundness_detail=$(jq -r '.soundness_detail // ""' "$verify_file" 2>/dev/null || echo "")
 fi
 
 critique_file=$(critique_file_for "$NAME")
@@ -81,8 +85,19 @@ fi
 echo "verify:    $verify_status${verify_cmd:+ ($verify_cmd)}"
 if [[ "$verify_status" == "not run" ]]; then
   echo "           run scripts/verify.sh $NAME first; do not merge on an unverified diff you have not read"
+elif [[ "$verify_status" == "fail" && "$verify_soundness" == "unsound" ]]; then
+  # Sending this back would spend a bounce on an agent that cannot fix it: the
+  # tests passed, and the environment is what lied about which tree they ran on.
+  echo "           verify FAILED on resolution, not on the tests:"
+  echo "           $verify_soundness_detail"
+  echo "           fix the environment (install or path inside the worktree), then rerun verify"
 elif [[ "$verify_status" == "fail" ]]; then
   echo "           verify FAILED; re-prompt the agent before reviewing further"
+elif [[ "$verify_status" == "skipped" && "$verify_soundness" == "unknown" ]]; then
+  echo "           the command passed but nothing is proven about which tree ran it:"
+  echo "           $verify_soundness_detail"
+elif [[ "$verify_soundness" == "disabled" ]]; then
+  echo "           resolution was not checked (HERDR_SWARM_NO_SOUNDNESS=1)"
 fi
 echo "critique:  $critique_verdict${critique_model:+ (${critique_model}${critique_confidence:+, confidence: $critique_confidence})}"
 case "$critique_verdict" in

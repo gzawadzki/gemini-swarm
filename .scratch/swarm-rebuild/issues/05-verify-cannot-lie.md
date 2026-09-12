@@ -14,20 +14,20 @@ having no gate at all.
 
 **Blocked by:** 01 — One shared test harness for the fake binaries.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] After the verify command runs, verify establishes where the code under test
+- [x] After the verify command runs, verify establishes where the code under test
       resolved from.
-- [ ] Resolution outside the worktree is reported as `fail`, not a warning.
-- [ ] The failure message names the module and the path it resolved from, so an
+- [x] Resolution outside the worktree is reported as `fail`, not a warning.
+- [x] The failure message names the module and the path it resolved from, so an
       editable-install problem is distinguishable from a genuine test failure.
-- [ ] A project where soundness cannot be established reports `skipped`, and never a
+- [x] A project where soundness cannot be established reports `skipped`, and never a
       false `pass`. Treat the detection mechanism as provisional: only one Python
       project is in evidence, and the requirement is the guarantee, not the technique.
-- [ ] An environment variable disables the check, for projects where it makes no
+- [x] An environment variable disables the check, for projects where it makes no
       sense, and the disabled state is visible in the result rather than silent.
-- [ ] The existing outcomes still hold: `pass` and `skipped` move a task on to the
+- [x] The existing outcomes still hold: `pass` and `skipped` move a task on to the
       critique, `fail` sends it back to the agent, and the result stays cached for the
       status view.
-- [ ] Verify gets its first test file, covering a sound run, an unsound one, an
+- [x] Verify gets its first test file, covering a sound run, an unsound one, an
       undeterminable one, and the escape hatch.
