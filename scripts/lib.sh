@@ -8,6 +8,14 @@
 #     not .result.workspace.cwd (which is absent)
 # Keep those paths in this file only, so a herdr upgrade means one edit.
 
+# Read one jq answer per `$(...)`, never several at once through `read`. The jq
+# on this platform ends every line with CRLF. Command substitution here drops the
+# trailing CR along with the newline, so `$(jq -r ...)` is clean; `read` strips
+# only the newline, so a collapsed multi-field read leaves a bare CR in the last
+# variable. That CR is invisible in output and non-empty to `[[ -n ]]`, which
+# turned a validation check into one that rejected every task while printing an
+# error message that looked blank. The per-field calls are the safe shape.
+
 # --- Trace -------------------------------------------------------------------
 #
 # Off by default. Turned on with --trace on any script, or HERDR_SWARM_TRACE=1
