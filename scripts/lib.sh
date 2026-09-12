@@ -868,6 +868,112 @@ critique_kind_for() {
   command -v gemini >/dev/null 2>&1 && { printf 'gemini'; return; }
 }
 
+# --- Run archive --------------------------------------------------------------
+#
+# A run's evidence outlives the run. cleanup.sh used to be the end of it: it
+# closed the panes and removed the worktrees, and with them went the diffs, the
+# gate verdicts and the config that said how each task was defined. Reconstructing
+# a run afterwards meant working from memory, which is also why the model-default
+# decision had nothing to compare against.
+#
+# The archive lives beside the briefs, outside every working repository, because
+# writing into a worktree flips its CLEAN column to DIRTY and the archive is
+# written while the worktrees are still being judged.
+
+RUN_DIR="${HERDR_SWARM_RUN_DIR:-$HOME/.herdr/runs}"
+
+# Run-level facts launch.sh records once and cleanup.sh reads back: the run id,
+# the config as launched, and which version of the skill ran it. Kept next to
+# state.json rather than inside it, because state.json is a per-task array that
+# four scripts iterate and a run-level object does not belong in it.
+run_meta_file() {
+  printf '%s/run.json' "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
+}
+
+# The run's identity, which is the moment it launched. State written before
+# run.json existed has to be named something, and the earliest task's start is
+# the same instant by a different route; a state file with neither falls back to
+# now, so an old run still archives rather than refusing.
+run_id_for() {  # <state-file>
+  local state_file="$1" id started
+  id=$(jq -r '.run_id // empty' "$(run_meta_file)" 2>/dev/null || true)
+  if [[ -n "$id" ]]; then printf '%s' "$id"; return; fi
+  started=$(jq -r '[.[].started_at // empty] | min // empty' "$state_file" 2>/dev/null || true)
+  if [[ -n "$started" ]]; then
+    date -u -d "@$started" +%Y%m%dT%H%M%SZ 2>/dev/null && return
+  fi
+  date -u +%Y%m%dT%H%M%SZ
+}
+
+run_archive_dir() {  # <state-file>
+  printf '%s/%s' "$RUN_DIR" "$(run_id_for "$1")"
+}
+
+# Copy the evidence for one run into <dir>. Every step is individually best
+# effort: a task whose worktree is already gone still contributes its verdicts,
+# and one unreadable diff must not cost the rest of the record.
+_archive_collect() {  # <dir> <state-file>
+  local dir="$1" state_file="$2" meta n i entry name worktree base_ref
+  meta=$(run_meta_file)
+
+  cp "$state_file" "$dir/state.json" 2>/dev/null || true
+  if [[ -f "$meta" ]]; then
+    cp "$meta" "$dir/run.json" 2>/dev/null || true
+    # The config as launched, not as it sits on disk now: the file the
+    # orchestrator wrote is routinely edited or deleted between runs.
+    jq '.config // {}' "$meta" > "$dir/tasks.json" 2>/dev/null || true
+  fi
+  # `if`, not `&&`: under the callers' `set -e` a missing trace log would abort
+  # the collection here and cost the rest of the record.
+  if [[ -f "$(trace_file)" ]]; then cp "$(trace_file)" "$dir/trace.log" 2>/dev/null || true; fi
+
+  # A snapshot, not a live view. status.sh reads git and the cached verdicts and
+  # spawns nothing, so this costs no quota; its failure costs no archive.
+  "$SWARM_LIB_DIR/status.sh" "$state_file" > "$dir/status.txt" 2>&1 || true
+
+  n=$(jq 'length' "$state_file" 2>/dev/null || echo 0)
+  for i in $(seq 0 $((n - 1))); do
+    entry=$(jq -c ".[$i]" "$state_file")
+    name=$(jq -r '.name' <<<"$entry")
+    cp "$(verify_file_for "$name")"   "$dir/$name.verify.json"   2>/dev/null || true
+    cp "$(critique_file_for "$name")" "$dir/$name.critique.json" 2>/dev/null || true
+    worktree=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" \
+                                "$(jq -r '.workspace_id // empty' <<<"$entry")")
+    [[ -n "$worktree" && -d "$worktree" ]] || continue
+    base_ref=$(resolve_base_ref "$entry" "$worktree") || continue
+    git -C "$worktree" diff "${base_ref}...HEAD" > "$dir/$name.diff" 2>/dev/null || true
+  done
+}
+
+# Write the run's archive and print where it went. Built in a staging directory
+# and moved into place, so the final directory existing always means a complete
+# record: a second cleanup, run once the worktrees are gone and the diffs with
+# them, finds it there and leaves it alone rather than overwriting it with less.
+#
+# Returns non-zero only when nothing could be written at all. Callers treat that
+# as a warning, because losing the record is not a reason to leave panes open.
+archive_run() {  # <state-file>
+  local state_file="$1" dir staging
+  dir=$(run_archive_dir "$state_file")
+  if [[ -d "$dir" ]]; then
+    echo "archive: already written, keeping the first one: $dir"
+    return 0
+  fi
+  staging="$dir.partial.$$"
+  rm -rf "$staging"
+  mkdir -p "$staging" || { echo "WARN: could not create $staging; this run leaves no record." >&2; return 1; }
+  _archive_collect "$staging" "$state_file"
+  if ! mv "$staging" "$dir" 2>/dev/null; then
+    # Another cleanup won the race and wrote the same directory first. Its copy
+    # is the earlier one, so it is the one with the worktrees still in place.
+    rm -rf "$staging"
+    echo "archive: already written, keeping the first one: $dir"
+    return 0
+  fi
+  echo "archive: $dir"
+  trace "-" "archive.write" "$dir"
+}
+
 # --- Trim review, on demand ---------------------------------------------------
 #
 # A separate, optional pass after review.sh: a cheap model reads the diff only

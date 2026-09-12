@@ -12,23 +12,23 @@ nothing to compare runs against.
 
 **Blocked by:** 01 — One shared test harness for the fake binaries.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Each run gets its own directory, named by the run's launch timestamp, outside
+- [x] Each run gets its own directory, named by the run's launch timestamp, outside
       every working repository and alongside the briefs the skill already keeps there.
-- [ ] The archive holds the run's task config, so how each task was defined stays
+- [x] The archive holds the run's task config, so how each task was defined stays
       inspectable.
-- [ ] The archive holds the trace, so the order in which things failed is recoverable.
-- [ ] The archive holds a status snapshot, and per task the diff, the verify verdict
+- [x] The archive holds the trace, so the order in which things failed is recoverable.
+- [x] The archive holds a status snapshot, and per task the diff, the verify verdict
       and the critique verdict.
-- [ ] The archive records the skill's commit and whether its tree was dirty at launch,
+- [x] The archive records the skill's commit and whether its tree was dirty at launch,
       so an odd run is attributable to a version. The launch step already reports
       this; the archive keeps it.
-- [ ] Cleanup archives as its first action, before closing any agent or removing any
+- [x] Cleanup archives as its first action, before closing any agent or removing any
       worktree.
-- [ ] Archiving does not depend on the rest of cleanup succeeding: a pane that will
+- [x] Archiving does not depend on the rest of cleanup succeeding: a pane that will
       not close must not cost the record.
-- [ ] Cleanup prints where the archive went.
-- [ ] A run cleaned up twice does not lose or corrupt the first archive.
-- [ ] Tests assert that the archive exists with its contents after a successful
+- [x] Cleanup prints where the archive went.
+- [x] A run cleaned up twice does not lose or corrupt the first archive.
+- [x] Tests assert that the archive exists with its contents after a successful
       cleanup, and still exists after a cleanup that failed partway.

@@ -39,8 +39,10 @@ export CALL_LOG="$T/calls.log"
 # Agent lifecycle state, one file per agent, so a scenario can seed it.
 export FAKE_AGENTS="$T/agents"; mkdir -p "$FAKE_AGENTS"
 
-# Briefs must never land in the operator's real ~/.herdr/briefs.
+# Briefs must never land in the operator's real ~/.herdr/briefs, and run archives
+# must never land in the real ~/.herdr/runs.
 export HERDR_SWARM_BRIEF_DIR="$T/briefs"
+export HERDR_SWARM_RUN_DIR="$T/runs"
 
 export PATH="$BIN:$PATH"
 

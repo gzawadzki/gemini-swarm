@@ -36,6 +36,8 @@ entries_file="$STATE_DIR/.entries.jsonl"
 # not block: during a rebuild the tree is dirty continuously, and blocking would
 # break the edit-and-try loop that the junction exists to allow.
 skill_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+skill_head="unknown"
+skill_dirty=0
 if git -C "$skill_root" rev-parse --git-dir >/dev/null 2>&1; then
   skill_head=$(git -C "$skill_root" rev-parse --short HEAD 2>/dev/null || echo "unknown")
   skill_dirty=$(git -C "$skill_root" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
@@ -47,6 +49,21 @@ if git -C "$skill_root" rev-parse --git-dir >/dev/null 2>&1; then
   fi
   trace "-" "skill.state" "$skill_head dirty=$skill_dirty root=$skill_root"
 fi
+
+# Run-level facts, written before the first agent exists so they survive a launch
+# that dies halfway. The config is embedded rather than referenced: the file the
+# orchestrator wrote is routinely edited or deleted between runs, and reading it
+# back at cleanup time would answer with whatever the next run put there. The run
+# id is this instant, and it names the archive cleanup.sh writes later.
+run_id=$(date -u +%Y%m%dT%H%M%SZ)
+jq -n --arg run_id "$run_id" --arg tasks_file "$TASKS_FILE" \
+      --arg skill_commit "$skill_head" --argjson skill_dirty "${skill_dirty:-0}" \
+      --arg skill_root "$skill_root" --argjson started_at "$(date +%s)" \
+      --argjson config "$(cat "$TASKS_FILE")" \
+  '{run_id: $run_id, started_at: $started_at, tasks_file: $tasks_file,
+    skill_commit: $skill_commit, skill_dirty: $skill_dirty, skill_root: $skill_root,
+    config: $config}' > "$(run_meta_file)"
+trace "-" "run.meta" "$run_id skill=$skill_head dirty=${skill_dirty:-0}"
 
 n_tasks=$(jq '.tasks | length' "$TASKS_FILE")
 echo "Launching $n_tasks task(s) from $TASKS_FILE"
@@ -392,6 +409,7 @@ trace "-" "run.end" "$(jq 'length' "$STATE_FILE") of $n_tasks task(s) launched, 
 
 echo
 echo "Launched. State written to $STATE_FILE"
+echo "Run id: $run_id (cleanup.sh archives this run under $RUN_DIR)"
 echo "Briefs: $BRIEF_DIR"
 echo "Check on them with: scripts/status.sh"
 if trace_enabled; then echo "Trace of this run: $(trace_file)"; fi

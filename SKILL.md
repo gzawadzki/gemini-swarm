@@ -695,7 +695,7 @@ applied to every task it pushes agents into cutting corners that matter. Take
 the cuts you agree with back to the agent (section 4 step 7), re-run `verify.sh`,
 and ignore the rest.
 
-## 11. Close the agents
+## 11. Close the agents, and archive the run
 
 ```bash
 scripts/cleanup.sh                          # agents that reported a result
@@ -703,6 +703,21 @@ scripts/cleanup.sh --all                    # working ones too, interrupting the
 scripts/cleanup.sh --worktrees [--force]    # also remove their workspace
 scripts/cleanup.sh --dry-run                # say what it would do
 ```
+
+Before it closes anything, `cleanup.sh` writes the run's archive to
+`~/.herdr/runs/<launch-timestamp>/` and prints the path. It holds the task config
+as launched, the state file, the trace, a status snapshot, and per task the diff,
+the verify verdict and the critique verdict, along with the skill commit the run
+ran on and whether that tree was dirty. Archiving is first precisely because
+everything after it is destructive: the diffs live in the worktrees this script
+removes, and an agent that will not close must not cost the record. A run cleaned
+up twice keeps the first archive rather than overwriting it with the emptier
+second one.
+
+That directory is what a post-mortem reads. Point the user at it when a run
+behaved oddly, and read it yourself before concluding anything about how a model
+or a task shape performed - "how was that task defined" used to be answerable
+only from memory.
 
 An agy agent that finished its task does not exit. It stays in its pane as an
 idle process still holding the shared OAuth credential, so the next launch that

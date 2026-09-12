@@ -39,6 +39,20 @@ command -v herdr >/dev/null 2>&1 || { echo "ERROR: herdr not found on PATH." >&2
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The record comes first, before a single pane is closed or a worktree removed.
+# Everything worth keeping about a run - the config, the diffs, the two gate
+# verdicts - lives in the worktrees and the state dir that the rest of this
+# script is about to take apart, and an agent that will not close must not cost
+# the evidence. A failure to archive is reported and then ignored: leaving panes
+# open because the record could not be written helps nobody.
+if [[ "$dry" == "1" ]]; then
+  echo "would archive this run to $(run_archive_dir "$STATE_FILE")"
+else
+  archive_run "$STATE_FILE" \
+    || echo "WARN: could not archive this run; once the worktrees are gone there is no record of it." >&2
+fi
+echo
+
 # The repo a worktree was cut from. State written before this field existed has
 # no 'repo', so ask git: a worktree's common git dir is the origin repo's .git.
 repo_of() {

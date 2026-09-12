@@ -78,6 +78,14 @@ grepok "herdr got the ready timeout"       "\-\-timeout 1000"               "$(c
 check  "state records the work budget" "900000" "$(jq -r '.[0].work_budget_ms' "$LAST_STATE_DIR/state.json")"
 check  "state records the brief file" "true" "$(jq -r '.[0].brief_file | endswith("t1.md")' "$LAST_STATE_DIR/state.json")"
 check  "state records a launch time" "true" "$(jq -r '.[0].started_at > 0' "$LAST_STATE_DIR/state.json")"
+# The run's own record, written before the first agent exists. cleanup.sh reads
+# it back to name the archive and to keep the config, which used to be gone by
+# the time anyone wanted to know how a task had been defined.
+check  "run.json names the run" "true" "$(jq -r '.run_id | test("^[0-9]{8}T[0-9]{6}Z$")' "$LAST_STATE_DIR/run.json")"
+check  "run.json embeds the config" "do the thing" "$(jq -r '.config.tasks[0].prompt' "$LAST_STATE_DIR/run.json")"
+check  "run.json records the skill commit" "true" "$(jq -r '.skill_commit | test("^[0-9a-f]+$")' "$LAST_STATE_DIR/run.json")"
+check  "run.json records whether the tree was dirty" "number" "$(jq -r '.skill_dirty | type' "$LAST_STATE_DIR/run.json")"
+grepok "says where the run will be archived" "Run id: [0-9]\{8\}T" "$out"
 grepok "agent started through herdr"      "agent start t1"                  "$(cat "$HERDR_CALL_LOG")"
 
 echo
