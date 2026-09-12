@@ -23,14 +23,16 @@ git -C "$SRC" commit -qam change
 RUN="$T/run"; mkdir -p "$RUN"
 export HERDR_SWARM_STATE_DIR="$RUN/.herdr-swarm"; mkdir -p "$HERDR_SWARM_STATE_DIR"
 
-write_state() { # worker-model
-  jq -n --arg wt "$SRC" --arg sha "$base_sha" --arg model "$1" \
+write_state() { # worker-model [files-json] [pitfalls-json]
+  jq -n --arg wt "$SRC" --arg sha "$base_sha" --arg model "$1" --argjson files "${2:-[]}" --argjson pitfalls "${3:-[]}" \
     '[{name:"t1", kind:"agy", model:$model, branch:"main", base:$sha, base_sha:$sha,
-       worktree_path:$wt, prompt:"append world to file.txt"}]' > "$HERDR_SWARM_STATE_DIR/state.json"
+       worktree_path:$wt, files:$files, pitfalls:$pitfalls,
+       prompt:"append world to file.txt"}]' > "$HERDR_SWARM_STATE_DIR/state.json"
   : > "$CALL_LOG"
 }
 critique() { ( cd "$RUN" && bash "$REPO/scripts/critique.sh" t1 2>&1 ); }
 verdict() { jq -r "$1" "$HERDR_SWARM_STATE_DIR/t1.critique.json"; }
+brief() { cat "$HERDR_SWARM_STATE_DIR/t1.critique.brief.md"; }
 
 echo "== 1. task written by the critique model: reviewed by the alternate =="
 write_state "gemini-3.8-flash-high"
@@ -73,6 +75,79 @@ check  "trim status"   "trim" "$(jq -r .status "$HERDR_SWARM_STATE_DIR/t1.trim.j
 check  "one cut"       "1"    "$(jq '.cuts | length' "$HERDR_SWARM_STATE_DIR/t1.trim.json")"
 check  "worktree untouched" "" "$(git -C "$SRC" status --porcelain)"
 check  "brief stays out of the worktree" "" "$(ls "$SRC" | grep -i brief || true)"
+
+echo
+echo "== 5. the declared pitfalls and scope reach the reviewer =="
+write_state "gemini-3.1-pro-high" \
+  '["file.txt","other.txt"]' \
+  '["file.txt is read by two callers","the loader caches it for the process lifetime"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"respected","note":"both callers updated"},{"pitfall":2,"status":"respected","note":"cache untouched"}]' critique)
+# The brief is the artefact the reviewer actually reads, so assert on it rather
+# than on what the script printed while building it.
+grepok "brief lists pitfall 1"        "1. file.txt is read by two callers"  "$(brief)"
+grepok "brief lists pitfall 2"        "2. the loader caches it"             "$(brief)"
+grepok "brief calls them criteria"    "[Jj]udge the diff against each"      "$(brief)"
+grepok "brief states the scope"       "^- file.txt$"                        "$(brief)"
+grepok "brief asks about strays"      "outside that list"                   "$(brief)"
+grepok "brief asks if a stray was needed" "whether it was necessary"        "$(brief)"
+grepok "schema asks for pitfalls_checked" "pitfalls_checked"                "$(brief)"
+check  "verdict records both pitfalls examined" "2" "$(verdict '.pitfalls_checked | length')"
+# The index the reviewer answers with is resolved back to the pitfall text, so a
+# later reader does not need the task config to know what was checked.
+check  "verdict keeps the pitfall text" "file.txt is read by two callers" "$(verdict '.pitfalls_checked[0].pitfall')"
+check  "verdict records the status"   "respected" "$(verdict '.pitfalls_checked[0].status')"
+# The gate filters, it never approves: that wording survives a pass.
+grepok "pass still does not approve"  "does not replace it"                 "$out"
+
+echo
+echo "== 5b. a pitfall the diff ignored is named in the verdict =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["keep the trailing newline"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"violated","note":"final newline dropped"}]' critique)
+check  "verdict names the violated pitfall" "keep the trailing newline" "$(verdict '.pitfalls_checked[0].pitfall')"
+check  "verdict records it as violated" "violated" "$(verdict '.pitfalls_checked[0].status')"
+grepok "the violation is printed"     "keep the trailing newline"           "$out"
+grepok "printed as violated"          "violated"                            "$out"
+
+echo
+echo "== 5c. a task with no declared pitfalls still reviews =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+out=$(critique); rc=$?
+check  "exit code" "0" "$rc"
+nogrep "no empty criteria section"    "[Jj]udge the diff against each"      "$(brief)"
+check  "verdict has an empty list" "0" "$(verdict '.pitfalls_checked | length')"
+
+echo
+echo "== 5d. a truncated diff is recorded as truncated =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["a trap"]'
+out=$(HERDR_SWARM_CRITIQUE_DIFF_LINES=3 critique)
+grepok "brief says it was cut off"    "cut off at 3 lines"                  "$(brief)"
+check  "verdict records the truncation" "true" "$(verdict '.diff_truncated')"
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["a trap"]'
+out=$(critique)
+check  "an untruncated diff says so"  "false" "$(verdict '.diff_truncated')"
+
+echo
+echo "== 5e. a pass that violated a pitfall is not reported as a pass =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["keep the trailing newline"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"violated","note":"dropped"}]' critique); rc=$?
+# The reviewer said "pass" while reporting a trap it was told about as violated.
+# That reply contradicts itself, and the brief told it a violation cannot be a
+# pass. Taking the word at face value is how a known defect reaches the operator
+# looking green in status.sh.
+check  "verdict is downgraded"        "revise"  "$(verdict .verdict)"
+check  "the reviewer's own word is kept" "pass" "$(verdict .reviewer_verdict)"
+check  "exit code says revise"        "1"       "$rc"
+grepok "says why it was downgraded"   "cannot be a pass"                    "$out"
+nogrep "does not claim nothing was found" "found nothing"                   "$out"
+
+echo
+echo "== 5f. a clean pass keeps its verdict and its wording =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["keep the trailing newline"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"respected","note":"kept"}]' critique); rc=$?
+check  "verdict is pass"              "pass"    "$(verdict .verdict)"
+check  "reviewer verdict matches"     "pass"    "$(verdict .reviewer_verdict)"
+check  "exit code"                    "0"       "$rc"
+grepok "still refuses to approve"     "does not replace it"                 "$out"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

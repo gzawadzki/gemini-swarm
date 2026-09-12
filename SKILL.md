@@ -391,8 +391,9 @@ schema, because the scripts depend on this one:
   not expect, a fixture that freezes the clock, a name that means two things. The
   brief carries them as constraints, under a generated instruction not to restate
   them in the source. An empty array is accepted with a warning, so "I read it
-  and found none" stays distinguishable from a forgotten field. Feeding them to
-  `critique.sh` as grading criteria is ticket 03, not yet built.
+  and found none" stays distinguishable from a forgotten field. `critique.sh`
+  grades the diff against each one (section 9), so a vague pitfall buys nothing:
+  write what would be checkable.
 - `args` are extra CLI flags. `launch.sh` injects the auto-approve flag and the
   model flags on its own, so only add flags beyond those.
 - `verify` is an optional shell command `verify.sh` runs inside the worktree as
@@ -541,10 +542,29 @@ A passing test suite says nothing about whether the agent did what it was asked.
 That question is what actually costs you a full diff read, so put a cheap model
 on it first. `critique.sh` runs one-shot print mode on the Antigravity Gemini
 pool, hands the reviewer the task's original prompt plus the diff against its
-base, and asks for a verdict against a fixed rubric: completeness, scope
-(deleted tests, disabled checks, unrelated edits), correctness, safety, tests.
-Style and refactor opinions are explicitly out of scope, because they generate
-noise rather than blockers.
+base, and asks for a verdict against a fixed rubric: the declared pitfalls,
+completeness, scope (deleted tests, disabled checks, unrelated edits),
+correctness, safety, tests. Style and refactor opinions are explicitly out of
+scope, because they generate noise rather than blockers.
+
+**The declared pitfalls are the first thing it judges.** Each one from the task
+config is numbered in the reviewer's brief as a criterion, and the reply carries
+a `pitfalls_checked` entry per pitfall saying whether the diff respected it,
+violated it, or whether it did not apply. The verdict file resolves those numbers
+back to the pitfall text, so a later reader can tell a thorough pass from a
+shallow one without the task config beside it. This is the fix for a real miss: a
+diff where a translated comment stopped describing the code one line below it
+came back `pass`, `confidence: high`, "completely and correctly implemented",
+because the reviewer had nothing specific to look for.
+
+The declared `files` go in as a scope criterion: the reviewer is asked to flag
+every change outside the list and say whether each was necessary. It reports, it
+does not fail — a new test file or a package import is a legitimate stray.
+
+A reply that marks a pitfall `violated` while returning `pass` contradicts itself
+and the brief it was given, so `critique.sh` downgrades it to `revise` and says
+why. The reviewer's own word is kept in the verdict file as `reviewer_verdict`,
+so the downgrade is auditable rather than a quiet rewrite.
 
 The verdict lands in `.herdr-swarm/<name>.critique.json` and shows up in the
 CRITIQUE column of `status.sh` and at the top of `review.sh`:
@@ -565,7 +585,9 @@ classic `gemini`, the same way `launch.sh` does. Override with
 `HERDR_SWARM_CRITIQUE_MODEL`, `HERDR_SWARM_CRITIQUE_KIND`,
 `HERDR_SWARM_CRITIQUE_EFFORT`, `HERDR_SWARM_CRITIQUE_TIMEOUT` (seconds, default
 600) and `HERDR_SWARM_CRITIQUE_DIFF_LINES` (default 1500, past which the diff in
-the brief is truncated and the reviewer is told to read the repo itself).
+the brief is truncated and the reviewer is told to read the repo itself; the
+verdict then records `"diff_truncated": true`, so a confident pass over a diff
+nobody saw in full is visible afterwards).
 
 **The reviewer is a different model from the author.** A model grading its own
 output shares its own blind spots. When the task's `model` in `state.json` is the

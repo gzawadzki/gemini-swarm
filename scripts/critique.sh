@@ -34,6 +34,13 @@ entry=$(jq -c --arg name "$NAME" '.[] | select(.name == $name)' "$STATE_FILE")
 workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
 worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 task_prompt=$(jq -r '.prompt // empty' <<<"$entry")
+# The recon the orchestrator did before writing the task. Grading against named
+# traps is the point: a diff where a translated comment stopped describing the
+# code one line below it came back "pass", confidence high, because the reviewer
+# had nothing specific to look for.
+task_pitfalls=$(jq -c '.pitfalls // []' <<<"$entry")
+task_files=$(jq -c '.files // []' <<<"$entry")
+n_pitfalls=$(jq 'length' <<<"$task_pitfalls")
 worker_model=$(jq -r '.model // empty' <<<"$entry")
 
 [[ -n "$worktree_path" && -d "$worktree_path" ]] || {
@@ -58,17 +65,24 @@ reviewer_model=$(critique_model_for "$worker_model")
 
 # Every exit path leaves a verdict file behind, so status.sh always has an
 # answer to show and never re-runs a critique that already happened.
-write_verdict() {  # verdict  summary  issues-json
+write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
   local issues="${3:-[]}"
   jq -e . >/dev/null 2>&1 <<<"$issues" || issues='[]'
+  local checked="${4:-[]}"
+  jq -e . >/dev/null 2>&1 <<<"$checked" || checked='[]'
   local independent=true
   [[ -n "$worker_model" && "$reviewer_model" == "$worker_model" ]] && independent=false
   jq -n --arg verdict "$1" --arg summary "$2" --argjson issues "$issues" \
         --arg model "$reviewer_model" --arg kind "$critique_kind" \
         --arg worker_model "$worker_model" --argjson independent "$independent" \
+        --arg reviewer_verdict "${reviewer_verdict:-}" \
+        --argjson pitfalls_checked "$checked" \
+        --argjson truncated "${diff_truncated:-false}" \
         --arg confidence "$confidence" --arg ts "$(date -u +%FT%TZ)" \
     '{verdict: $verdict, confidence: $confidence, model: $model, kind: $kind,
       worker_model: $worker_model, independent: $independent,
+      reviewer_verdict: $reviewer_verdict,
+      pitfalls_checked: $pitfalls_checked, diff_truncated: $truncated,
       issues: $issues, summary: $summary, ran_at: $ts}' > "$critique_file"
   trace "$NAME" "verdict.write" "$1${confidence:+ (confidence: $confidence)} -> $critique_file"
 }
@@ -88,7 +102,9 @@ if [[ -z "$diff_body" ]]; then
 fi
 
 truncated_note=""
+diff_truncated=false
 if (( $(wc -l <<<"$diff_body") > CRITIQUE_DIFF_LINES )); then
+  diff_truncated=true
   diff_body=$(head -n "$CRITIQUE_DIFF_LINES" <<<"$diff_body")
   truncated_note="
 The diff above was cut off at $CRITIQUE_DIFF_LINES lines. Read the rest yourself with
@@ -104,6 +120,35 @@ if [[ -f "$verify_file" ]]; then
 fi
 
 [[ -n "$task_prompt" ]] || task_prompt="(not recorded; this task predates prompts being stored in state.json)"
+
+# Generated from the fields, never hand-written, so a task cannot reach the
+# reviewer with its traps left out. An older task carries neither field; those
+# sections are then absent rather than empty, because an empty criteria list
+# reads as "nothing to check" and that is not what a missing field means.
+pitfalls_section=""
+if (( n_pitfalls > 0 )); then
+  pitfalls_section="## Pitfalls the task declared
+
+The orchestrator found these traps by reading the code before writing the task.
+Judge the diff against each one, by number:
+
+$(jq -r 'to_entries[] | "\(.key + 1). \(.value)"' <<<"$task_pitfalls")
+"
+fi
+
+scope_section=""
+if [[ "$(jq 'length' <<<"$task_files")" -gt 0 ]]; then
+  scope_section="## The scope the task declared
+
+The task said it would touch these files:
+
+$(jq -r '.[] | "- " + .' <<<"$task_files")
+
+Flag every change outside that list. For each one, say whether it was necessary
+work. Straying is not automatically wrong - a new test file or a package import
+is legitimate - so report it, do not assume it is a defect.
+"
+fi
 
 # --- The brief --------------------------------------------------------------
 #
@@ -140,18 +185,23 @@ $truncated_note
 Your working directory is the repository under review, checked out on the task's
 branch. Read any file you need for context instead of guessing.
 
+$pitfalls_section
+$scope_section
 ## What to judge, in this order
 
-1. **Completeness.** Does the change do everything the task asked? Work that is
+1. **The declared pitfalls**, if the task listed any. For each one, decide
+   whether the diff respected it, violated it, or whether it turned out not to
+   apply. A violated pitfall is at least a major issue, so it cannot be a pass.
+2. **Completeness.** Does the change do everything the task asked? Work that is
    missing, stubbed, or silently narrowed is a blocker.
-2. **Scope.** Does it do anything the task did not ask for? Deleted or skipped
+3. **Scope.** Does it do anything the task did not ask for? Deleted or skipped
    tests, weakened assertions, disabled lint rules, commented-out code, and
    unrelated edits are blockers even when the tests pass.
-3. **Correctness.** Logic errors, unhandled cases, call sites not updated,
+4. **Correctness.** Logic errors, unhandled cases, call sites not updated,
    wrong types, off-by-one, resource leaks.
-4. **Safety.** Hardcoded secrets, injection, dropped authentication or
+5. **Safety.** Hardcoded secrets, injection, dropped authentication or
    authorization checks, destructive filesystem or shell operations.
-5. **Tests.** Is there a test that would fail without this change?
+6. **Tests.** Is there a test that would fail without this change?
 
 Do not comment on style, naming, formatting, or preference. Do not propose
 refactors. Report only what is wrong.
@@ -160,7 +210,7 @@ refactors. Report only what is wrong.
 
 Output exactly one JSON object and nothing else. No prose, no code fence.
 
-{"verdict":"pass|revise|reject","confidence":"low|medium|high","issues":[{"severity":"blocker|major|minor","file":"path/to/file","note":"one sentence"}],"summary":"one sentence"}
+{"verdict":"pass|revise|reject","confidence":"low|medium|high","issues":[{"severity":"blocker|major|minor","file":"path/to/file","note":"one sentence"}],"pitfalls_checked":[{"pitfall":1,"status":"respected|violated|not-applicable","note":"one sentence"}],"summary":"one sentence"}
 
 - \`pass\` means no blocker and no major issue. Use an empty issues array.
 - \`revise\` means real problems the same agent can fix with a follow-up prompt.
@@ -168,6 +218,11 @@ Output exactly one JSON object and nothing else. No prose, no code fence.
   in a way another prompt to the same agent will not fix.
 - Set \`confidence\` to \`low\` when the truncated diff or missing context kept you
   from judging properly. Guessing confidently is worse than saying so.
+- \`pitfalls_checked\` has one entry per declared pitfall, in the order they were
+  listed, with \`pitfall\` set to that number. It is how the operator tells a
+  thorough pass from a shallow one, so do not leave it out and do not include a
+  pitfall you did not actually look for. Use an empty array when the task
+  declared none.
 EOF
 
 # The agent binary is a native Windows build under Git Bash and reads MSYS paths
@@ -276,14 +331,35 @@ verdict=$(jq -r '.verdict // "unparseable"' <<<"$parsed")
 confidence=$(jq -r '.confidence // ""' <<<"$parsed")
 summary=$(jq -r '.summary // ""' <<<"$parsed")
 issues=$(jq -c '.issues // []' <<<"$parsed")
+# The reviewer answers with the number it was given. Resolve it back to the text
+# here, so the verdict file says what was checked without needing the task config
+# beside it. An out-of-range number keeps whatever the reviewer wrote.
+pitfalls_checked=$(jq -c --argjson declared "$task_pitfalls" '
+    [ (.pitfalls_checked // [])[]
+      | . as $c
+      | .pitfall = ( if (.pitfall | type) == "number" and $declared[.pitfall - 1] != null
+                     then $declared[.pitfall - 1] else .pitfall end ) ]' <<<"$parsed")
 
 case "$verdict" in
   pass|revise|reject) ;;
   *) verdict="unparseable"; summary="reviewer returned an unknown verdict" ;;
 esac
 
-trace "$NAME" "verdict.parse" "$verdict ($(jq 'length' <<<"$issues") issues, confidence ${confidence:-unset})"
-write_verdict "$verdict" "$summary" "$issues"
+# What the reviewer actually said, kept whatever happens next, so a downgrade is
+# auditable rather than a quiet rewrite of someone else's answer.
+reviewer_verdict="$verdict"
+n_violated=$(jq '[.[] | select(.status == "violated")] | length' <<<"$pitfalls_checked")
+if [[ "$verdict" == "pass" ]] && (( n_violated > 0 )); then
+  # The brief states that a violated pitfall cannot be a pass, so this reply
+  # contradicts itself. Reporting it as a pass is how a defect the agent was
+  # warned about reaches the operator looking green.
+  verdict="revise"
+  summary="reviewer passed the diff while reporting $n_violated declared pitfall(s) as violated, which cannot be a pass; downgraded. ${summary}"
+  trace "$NAME" "verdict.downgrade" "pass -> revise, $n_violated violated pitfall(s)"
+fi
+
+trace "$NAME" "verdict.parse" "$verdict ($(jq 'length' <<<"$issues") issues, $(jq 'length' <<<"$pitfalls_checked") of $n_pitfalls pitfall(s) examined, confidence ${confidence:-unset})"
+write_verdict "$verdict" "$summary" "$issues" "$pitfalls_checked"
 
 echo "VERDICT: $verdict${confidence:+ (confidence: $confidence)}"
 # Plain `[[ ... ]] && echo` would exit the script under `set -e` when the summary
@@ -293,6 +369,20 @@ if [[ "$(jq 'length' <<<"$issues")" -gt 0 ]]; then
   echo
   echo "--- issues ---"
   jq -r '.[] | "  [\(.severity // "?")] \(.file // "?"): \(.note // "")"' <<<"$issues"
+fi
+# A pass that examined nothing and a pass that checked three named traps are not
+# the same answer, so the count is always shown, and a violated pitfall is named
+# in full rather than left to the summary.
+if (( n_pitfalls > 0 )); then
+  echo
+  echo "--- pitfalls ($(jq 'length' <<<"$pitfalls_checked") of $n_pitfalls examined) ---"
+  jq -r '.[] | "  [\(.status // "?")] \(.pitfall)\(if (.note // "") == "" then "" else " - " + .note end)"' \
+    <<<"$pitfalls_checked"
+  if [[ "$(jq '[.[] | select(.status == "violated")] | length' <<<"$pitfalls_checked")" -gt 0 ]]; then
+    echo
+    echo "A declared pitfall was reported as violated. The agent was told about that"
+    echo "trap before it started, so treat this as the diff ignoring its brief."
+  fi
 fi
 echo
 

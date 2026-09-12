@@ -146,7 +146,8 @@ FAKE
 # agy: the quota table when asked for /usage, otherwise a reviewer.
 # The real agy answers for whoever is signed in, so the fake keys the five-hour
 # figure off the same live-account file the account layer swaps.
-# Knobs: FAKE_GEM_WEEK, FAKE_GEM_5H_A, FAKE_GEM_5H_B.
+# Knobs: FAKE_GEM_WEEK, FAKE_GEM_5H_A, FAKE_GEM_5H_B, FAKE_PITFALLS_CHECKED
+# (the pitfalls_checked array the reviewer answers with, verbatim JSON).
 _harness_fake_agy() {
   cat > "$BIN/agy" <<'FAKE'
 #!/usr/bin/env bash
@@ -166,8 +167,9 @@ echo "agy $*" >> "$CALL_LOG"
 if [[ "$*" == *overengineering* ]]; then
   echo 'Sure. {"cuts":[{"file":"file.txt","what":"drop the config flag","why":"never read","saves":"3"}],"summary":"one flag too many"}'
 else
+  checked="${FAKE_PITFALLS_CHECKED:-[]}"
   echo '```json
-{"verdict":"pass","confidence":"high","issues":[],"summary":"does what was asked"}
+{"verdict":"pass","confidence":"high","issues":[],"pitfalls_checked":'"$checked"',"summary":"does what was asked"}
 ```'
 fi
 FAKE

@@ -81,18 +81,18 @@ The scripts depend on this schema, so do not invent another one.
   new test file, a package import) and a false bounce costs more than a line to
   read. An empty array is rejected: a task that may change nothing is not a task.
 - `pitfalls` — the traps you found by reading, as an array of strings. They reach
-  the agent as constraints in its brief. An empty array is accepted with a
-  warning, so "I read it and found none" stays expressible and stays
-  distinguishable from a forgotten field.
+  the agent as constraints in its brief, and the reviewer grades the diff against
+  each one, so write them checkably. An empty array is accepted with a warning,
+  so "I read it and found none" stays expressible and stays distinguishable from
+  a forgotten field.
 
 Every entry in either array is one non-empty string — one path, or one trap
 written out. A task whose entries are anything else is skipped, with the
 offending field named.
 
-Two consumers are specified but not yet built: reporting the files a diff touched
-outside `files` (ticket 04), and grading the diff against each pitfall
-(ticket 03). Until those land, both fields act on the agent through the brief
-only.
+Reporting the files a diff touched outside `files` (ticket 04) is specified but
+not yet built. Everything else both fields feed is live: the agent's brief, and
+the reviewer's criteria.
 
 `launch.sh` validates `files` and `pitfalls` before it creates a worktree, and
 skips a task that fails with an error naming the missing field. The tasks after
