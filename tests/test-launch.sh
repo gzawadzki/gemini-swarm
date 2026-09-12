@@ -27,6 +27,8 @@ run_launch() { # runs launch.sh in the dir prepared by new_run_dir
   cat > "$dir/tasks.json" <<JSON
 {"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.1-pro-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":["file.txt"],
+  "pitfalls":["file.txt is read by two callers; keep the trailing newline"],
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
   ( cd "$dir" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
@@ -58,6 +60,15 @@ check  "prompt does not carry the brief" "0" "$(grep -c 'Result file' "$HERDR_PR
 grepok "brief file holds the task text"    "do the thing"                    "$(cat "$T/briefs/t1.md")"
 grepok "brief file holds the result contract" "Result file (required, last action)" "$(cat "$T/briefs/t1.md")"
 grepok "brief names the result path"       "t1.result.json"                  "$(cat "$T/briefs/t1.md")"
+# The pitfalls are the recon the orchestrator did; the agent has to read them as
+# requirements, and must not paste them back out as comments. Earlier diffs
+# reproduced prompt steps in the source verbatim, numbering and all.
+grepok "brief heads the pitfalls as constraints" "^## Constraints"           "$(cat "$T/briefs/t1.md")"
+grepok "brief carries the pitfall text"    "keep the trailing newline"       "$(cat "$T/briefs/t1.md")"
+grepok "brief forbids restating them"      "comments, docstrings"            "$(cat "$T/briefs/t1.md")"
+grepok "brief carries the declared files"  "^- file.txt"                     "$(cat "$T/briefs/t1.md")"
+check  "state records the declared files" "file.txt" "$(jq -r '.[0].files | join(",")' "$LAST_STATE_DIR/state.json")"
+check  "state records the pitfalls" "1" "$(jq -r '.[0].pitfalls | length' "$LAST_STATE_DIR/state.json")"
 grepok "herdr got the ready timeout"       "\-\-timeout 1000"               "$(cat "$HERDR_CALL_LOG")"
 check  "state records the work budget" "900000" "$(jq -r '.[0].work_budget_ms' "$LAST_STATE_DIR/state.json")"
 check  "state records the brief file" "true" "$(jq -r '.[0].brief_file | endswith("t1.md")' "$LAST_STATE_DIR/state.json")"
@@ -125,7 +136,8 @@ echo "== 5d. a work-budget-sized ready timeout is clamped, not sent =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 cat > "$LAST_RUN_DIR/tasks.json" <<JSON
 {"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
-  "branch":"agent/t1","prompt":"do the thing","args":[],"timeout_ms":1800000}]}
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":["file.txt"],"pitfalls":[],"timeout_ms":1800000}]}
 JSON
 out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
 # 1800000 in this field is what herdr answers invalid_agent_timeout to, and it is
@@ -147,6 +159,56 @@ grepok "removed the worktree"             "worktree remove"                 "$(c
 # refuses a branch that already exists.
 check  "branch was deleted" "" "$(git -C "$SRC" rev-parse --verify --quiet refs/heads/agent/t1 || true)"
 check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 5f. a task with no pitfalls is skipped, and the next task still launches =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+{"tasks":[
+ {"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],"files":["file.txt"]},
+ {"name":"t2","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t2","prompt":"do the other thing","args":[],
+  "files":["file.txt"],"pitfalls":["the loader caches file.txt for the process lifetime"]}]}
+JSON
+out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+grepok "names the missing field"          "pitfalls"                        "$out"
+grepok "says to read the code first"      "[Rr]ead the code"                "$out"
+check  "no worktree for the bad task" "" "$(grep -o '\-\-label t1' "$HERDR_CALL_LOG" || true)"
+check  "no agent for the bad task" "" "$(grep -o 'agent start t1' "$HERDR_CALL_LOG" || true)"
+# A typo in one task must not cost the tasks after it, which is how the
+# agent-name and repo checks already behave.
+grepok "the next task still launched"     "agent start t2"                  "$(cat "$HERDR_CALL_LOG")"
+check  "state.json holds only the good task" "t2" "$(jq -r '.[].name' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 5g. a task with no files is skipped =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],"pitfalls":["a trap"]}]}
+JSON
+out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+grepok "names the missing field"          "files"                           "$out"
+check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
+check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 5h. an empty pitfalls list warns but launches =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":["file.txt"],"pitfalls":[]}]}
+JSON
+out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+# "I read it and found nothing" stays expressible, and stays distinguishable
+# from a forgotten field.
+grepok "warns about the empty list"       "no pitfalls"                     "$out"
+grepok "the task still launched"          "agent start t1"                  "$(cat "$HERDR_CALL_LOG")"
+# The anti-restate wording is generated, so it cannot be dropped by a task that
+# declared nothing to restate.
+grepok "brief still forbids restating"    "comments, docstrings"            "$(cat "$T/briefs/t1.md")"
 
 echo
 echo "== 6. refuses to run outside a herdr pane =="

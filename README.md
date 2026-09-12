@@ -47,6 +47,10 @@ writes the config and drives the scripts. To do it manually:
       "repo": "/absolute/path/to/repo",
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest and report the result.",
+      "files": ["src/auth/tokens.py", "tests/test_auth.py"],
+      "pitfalls": [
+        "The test fails on an expired fixture token, not on the verification logic; regenerating the fixture is the fix, widening the leeway window is not."
+      ],
       "args": [],
       "verify": "pytest -q tests/test_auth.py",
       "work_budget_ms": 900000
@@ -67,9 +71,20 @@ egress gate before the diff is reviewed (see step 4). Omit it and the tooling
 auto-detects one from the project (`npm`/`yarn`/`pnpm test`, `pytest`,
 `cargo test`, `go test`, a `test:` Make target).
 
+`files` and `pitfalls` are required, and `launch.sh` skips a task that leaves
+out either one. `files` is what the task is expected to touch; `pitfalls` is what you
+found by reading that code before writing the task — the caller you would not
+expect, the fixture that freezes the clock. They reach the agent as constraints
+it must satisfy without restating them in the source. An empty `pitfalls` array
+is accepted with a warning, so "I read it and found none" stays expressible.
+
 Write the `prompt` specifically enough to be checkable. Step 5 grades the diff
 against it, so a reviewer can measure "add a retry with backoff to the S3 upload
 in storage.py and cover it with a test" but not "improve error handling".
+
+[docs/reference/task-definition.md](docs/reference/task-definition.md) covers the
+whole schema, the test for whether a unit of work is small enough to hand over at
+all, and the rules for writing a prompt.
 
 **2. Launch.** This creates a worktree and branch per task and starts the agents
 in parallel:

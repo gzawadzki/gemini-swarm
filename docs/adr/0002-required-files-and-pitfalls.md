@@ -1,7 +1,7 @@
 # ADR 0002: `files` and `pitfalls` are required fields
 
 **Date:** 2026-09-12
-**Status:** accepted (schema change not yet implemented)
+**Status:** accepted, implemented in `launch.sh`
 
 ## Context
 

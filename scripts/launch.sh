@@ -71,6 +71,8 @@ for i in $(seq 0 $((n_tasks - 1))); do
   legacy_timeout=$(jq -r '.timeout_ms // empty' <<<"$task")
   explicit_ready=$(jq -r '.ready_timeout_ms // empty' <<<"$task")
   verify=$(jq -r '.verify // empty' <<<"$task")
+  files_type=$(jq -r 'if has("files") then (.files | type) else "missing" end' <<<"$task")
+  pitfalls_type=$(jq -r 'if has("pitfalls") then (.pitfalls | type) else "missing" end' <<<"$task")
   mapfile -t extra_args < <(jq -r '.args // [] | .[]' <<<"$task")
 
   if ! [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; then
@@ -80,6 +82,33 @@ for i in $(seq 0 $((n_tasks - 1))); do
   [[ -d "$repo" ]] || { echo "ERROR: repo '$repo' for task '$name' does not exist. Skipping." >&2; continue; }
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || { echo "ERROR: '$repo' is not a git repo. Skipping task '$name'." >&2; continue; }
+
+  # A task whose code the orchestrator never read is the cause this schema exists
+  # to remove: the agent discovers the traps instead, and the discoveries come
+  # back as bounced verifies and invented dead code. Filling `pitfalls` honestly
+  # is not possible without reading, so requiring the field enforces the reading.
+  # See docs/adr/0002-required-files-and-pitfalls.md.
+  missing=()
+  [[ "$files_type" == "array" ]] || missing+=("files")
+  [[ "$pitfalls_type" == "array" ]] || missing+=("pitfalls")
+  if (( ${#missing[@]} > 0 )); then
+    echo "ERROR: task '$name' is missing ${missing[*]} (each an array). Read the code this task will touch, then declare the files it may change and the traps you found - an empty 'pitfalls' array is how you say you looked and found none. Skipping. See docs/reference/task-definition.md." >&2
+    trace "$name" "recon.reject" "missing: ${missing[*]}"
+    continue
+  fi
+  n_files=$(jq '.files | length' <<<"$task")
+  n_pitfalls=$(jq '.pitfalls | length' <<<"$task")
+  if (( n_files == 0 )); then
+    echo "ERROR: task '$name' declares an empty 'files' array, so it claims to change nothing. Read the code and name the files this task is expected to touch. Skipping." >&2
+    trace "$name" "recon.reject" "files declared empty"
+    continue
+  fi
+  if (( n_pitfalls == 0 )); then
+    # Accepted, because "I read it and found no traps" has to stay expressible.
+    # Warned about, because it is also what a hurried orchestrator writes.
+    echo "WARN: [$name] declares no pitfalls. That reads as 'I read this code and found no traps'; if you have not read it yet, stop and read it." >&2
+  fi
+  trace "$name" "recon.accept" "$n_files file(s), $n_pitfalls pitfall(s)"
 
   if [[ -n "$legacy_timeout" && -z "$explicit_ready" ]]; then
     echo "WARN: [$name] 'timeout_ms' is the old name for 'ready_timeout_ms', which is TUI readiness only (max ${MAX_READY_TIMEOUT_MS}). If you meant how long the task may run, use 'work_budget_ms'." >&2
@@ -215,10 +244,40 @@ for i in $(seq 0 $((n_tasks - 1))); do
   # nobody has reviewed yet. Measured at 6519 bytes, it took two attempts.
   brief_file="$BRIEF_DIR/${name}.md"
   brief_native=$(to_native "$brief_file")
+  # Generated from the fields rather than written per task, so the instruction
+  # not to restate the constraints cannot be dropped by an orchestrator in a
+  # hurry - earlier diffs pasted prompt steps into the source verbatim,
+  # numbering and all.
+  if (( n_pitfalls > 0 )); then
+    pitfall_block=$(jq -r '.pitfalls[] | "- " + .' <<<"$task")
+  else
+    pitfall_block="- None were found in the code this task touches. That is a
+  statement about the traps, not a licence to skip reading what you change."
+  fi
+  files_block=$(jq -r '.files[] | "- " + .' <<<"$task")
   cat > "$brief_file" <<BRIEF
 # Task: $name
 
 $prompt
+
+## Constraints
+
+Traps the orchestrator found by reading this code before writing the task. They
+are requirements to satisfy, not background:
+
+$pitfall_block
+
+Do not restate any of this in the source. Constraints and task steps do not
+belong in comments, docstrings or test names: satisfy them and leave code that
+reads as though they had never been written down. The steps above are
+requirements, not a sequence to mirror in the structure of the code.
+
+## Files this task is expected to touch
+
+$files_block
+
+If the work genuinely needs a file outside that list, change it and say so in
+your result summary. This is the expected scope, not a lock.
 
 ## Ground rules
 
@@ -301,13 +360,15 @@ BRIEF
         --arg model "$model" --arg effort "$effort" --arg account "$account" \
         --arg fallback_from "$fallback_from" --arg verify "$verify" --arg prompt "$prompt" \
         --arg brief_file "$brief_file" --argjson work_budget_ms "$work_budget_ms" \
+        --argjson files "$(jq -c '.files' <<<"$task")" \
+        --argjson pitfalls "$(jq -c '.pitfalls' <<<"$task")" \
         --argjson started_at "$(date +%s)" \
     '{name: $name, kind: $kind, repo: $repo, branch: $branch, base: $base, base_sha: $base_sha,
       model: $model, effort: $effort, account: $account, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
       worktree_path: $worktree_path, status_file: $status_file, brief_file: $brief_file,
       work_budget_ms: $work_budget_ms, started_at: $started_at, verify: $verify,
-      prompt: $prompt}' \
+      files: $files, pitfalls: $pitfalls, prompt: $prompt}' \
     >> "$entries_file"
   trace "$name" "state.write" "entry recorded"
 done

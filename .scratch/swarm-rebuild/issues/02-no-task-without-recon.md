@@ -20,35 +20,35 @@ the documentation split, would mean writing them twice.
 
 **Blocked by:** 01 — One shared test harness for the fake binaries.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The task schema requires `files` and `pitfalls`, both arrays.
-- [ ] The launch step validates them before creating a worktree, and skips a task
+- [x] The task schema requires `files` and `pitfalls`, both arrays.
+- [x] The launch step validates them before creating a worktree, and skips a task
       that fails with an error naming the missing field.
-- [ ] A validation failure on one task does not abandon the tasks after it, matching
+- [x] A validation failure on one task does not abandon the tasks after it, matching
       how the existing agent-name and repo checks behave.
-- [ ] An empty `pitfalls` array is accepted with a warning, so "I checked and found
+- [x] An empty `pitfalls` array is accepted with a warning, so "I checked and found
       nothing" stays expressible and distinguishable from a forgotten field.
-- [ ] The brief carries the pitfalls under a heading that states they are constraints
+- [x] The brief carries the pitfalls under a heading that states they are constraints
       to satisfy, plus the declared file list.
-- [ ] The brief tells the agent not to restate the pitfalls as comments or
+- [x] The brief tells the agent not to restate the pitfalls as comments or
       docstrings. Earlier diffs pasted prompt steps into the source verbatim,
       numbering and all, so this wording is load-bearing.
-- [ ] That section is generated from the fields rather than written per task, so the
+- [x] That section is generated from the fields rather than written per task, so the
       anti-restate wording cannot be dropped by an orchestrator in a hurry.
-- [ ] The example task config declares both fields in every task, and shows pitfalls
+- [x] The example task config declares both fields in every task, and shows pitfalls
       specific enough to be checkable rather than placeholders.
-- [ ] A reference document covers the schema, the slice test and the prompt-writing
+- [x] A reference document covers the schema, the slice test and the prompt-writing
       rules, and the launch step of the skill document points at it.
-- [ ] The slice test names its thresholds: roughly 15 minutes of agent time, a
+- [x] The slice test names its thresholds: roughly 15 minutes of agent time, a
       declared file list, one verify command, pitfalls written down. A unit of work
       that cannot be described that way stays with the orchestrator.
-- [ ] The prompt-writing rules cover at least: name concrete symbols rather than
+- [x] The prompt-writing rules cover at least: name concrete symbols rather than
       generalities so the verify command can grep for them; do not paste prompt steps
       into the code as comments; do not add compatibility shims or aliases the task
       did not ask for; steps are requirements, not a sequence to mirror in the source;
       a verify command must not reinstall the package; aim at a diff of about 400
       lines and split anything estimated above it.
-- [ ] Tests assert that a task missing either field does not start, that the brief
+- [x] Tests assert that a task missing either field does not start, that the brief
       contains the pitfalls and the anti-restate instruction, and that the following
       task in the same config still launches.

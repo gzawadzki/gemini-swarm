@@ -326,6 +326,16 @@ Pipeline, in order:
 
 ## 5. Write the task config
 
+**Read the code the task will touch before you write the task.** Not the file
+tree, the code. The traps you find go in `pitfalls`, and `launch.sh` will not
+start a task that leaves out either them or the files it may change. That is the
+whole mechanism: guidance to be specific already existed and did not work, so it
+moved into the schema ([ADR 0002](docs/adr/0002-required-files-and-pitfalls.md)).
+
+[docs/reference/task-definition.md](docs/reference/task-definition.md) is the
+full reference: every field, the test for whether a unit of work is a slice at
+all, and the rules for writing a prompt. Read it while you fill the fields in.
+
 Generate a JSON file shaped like `tasks.example.json`. Do not invent a different
 schema, because the scripts depend on this one:
 
@@ -339,6 +349,10 @@ schema, because the scripts depend on this one:
       "repo": "/absolute/path/to/repo",
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest tests/test_auth.py and report the result.",
+      "files": ["src/auth/tokens.py", "tests/test_auth.py"],
+      "pitfalls": [
+        "The test fails on an expired fixture token, not on the verification logic; regenerating the fixture is the fix, widening the leeway window is not."
+      ],
       "args": [],
       "verify": "pytest -q tests/test_auth.py",
       "work_budget_ms": 900000
@@ -363,7 +377,20 @@ schema, because the scripts depend on this one:
   the prompt text either. Write it specifically enough to be checkable, because
   `critique.sh` (section 9) grades the diff against this text: "add a retry with
   backoff to the S3 upload in storage.py and cover it with a test" gives the
-  reviewer something to measure, "improve error handling" does not.
+  reviewer something to measure, "improve error handling" does not. The rest of
+  the prompt-writing rules — name concrete symbols, no shims nobody asked for, no
+  verify command that reinstalls the package, aim at 400 diff lines — are in
+  [the task-definition reference](docs/reference/task-definition.md#writing-the-prompt).
+- `files` is what this task is expected to touch, and it is **required**. An
+  empty array is rejected. It reaches the agent in the brief and the gate reports
+  changes outside it, but does not fail on them: legitimate strays exist and a
+  false bounce costs more than a line to read.
+- `pitfalls` is what you found by reading that code, and it is **required**. Each
+  entry is a trap the agent would otherwise have to discover: a caller you would
+  not expect, a fixture that freezes the clock, a name that means two things. The
+  brief carries them as constraints, under a generated instruction not to restate
+  them in the source. An empty array is accepted with a warning, so "I read it
+  and found none" stays distinguishable from a forgotten field.
 - `args` are extra CLI flags. `launch.sh` injects the auto-approve flag and the
   model flags on its own, so only add flags beyond those.
 - `verify` is an optional shell command `verify.sh` runs inside the worktree as
@@ -410,7 +437,12 @@ Write only the task-specific instructions in `prompt`.
 scripts/launch.sh tasks.json
 ```
 
-For each task this:
+Before anything else, each task is checked for `files` and `pitfalls`, while no
+worktree exists yet: one that leaves out either is skipped with an error naming
+the missing field, and the tasks after it still launch. See
+[the task-definition reference](docs/reference/task-definition.md).
+
+For the tasks that pass, this:
 
 1. Reads the Antigravity quota once and picks the account for the task, swapping
    the live credential if the other account is needed, routes the task to codex
@@ -420,7 +452,9 @@ For each task this:
 3. Runs `herdr agent start <name> --kind <kind> --pane <pane_id> -- <auto-approve-flag> [model flags] <args...>`.
    Both accounts start identically: the account was already decided in step 1, by
    swapping the credential `agy` reads at start-up.
-4. Writes the brief to `~/.herdr/briefs/<name>.md`, waits for `interactive_ready`,
+4. Writes the brief to `~/.herdr/briefs/<name>.md` — the prompt plus generated
+   sections for the pitfalls, the declared files, the ground rules and the result
+   file — waits for `interactive_ready`,
    then runs `herdr agent prompt <name> "Read the file <brief> and carry out the
    task it describes in this worktree."` **without** `--wait`, so tasks run in
    parallel, and confirms the agent reacted.
@@ -434,10 +468,11 @@ For each task this:
    its output redirected to `/dev/null`.**
 5. Records `{name, kind, repo, model, effort, account, fallback_from, branch,
    base, base_sha, pane_id, workspace_id, worktree_path, status_file, verify,
-   prompt}` into
+   files, pitfalls, prompt}` into
    `.herdr-swarm/state.json`. The `prompt` is stored because `critique.sh`
    (section 9) needs to know what the task was asked to do in order to judge
-   whether the diff did it. `account` is empty for a codex task.
+   whether the diff did it; `files` and `pitfalls` travel with it for the same
+   reason. `account` is empty for a codex task.
 
 Launching confirms that the agent started and accepted the prompt. It confirms
 nothing about the work.
