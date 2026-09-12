@@ -55,12 +55,18 @@ critique_summary=""
 critique_issues="[]"
 critique_model=""
 critique_confidence=""
+critique_checked="[]"
+critique_declared=0
+critique_reviewer_verdict=""
 if [[ -f "$critique_file" ]]; then
   critique_verdict=$(jq -r '.verdict // "?"' "$critique_file" 2>/dev/null || echo "?")
   critique_summary=$(jq -r '.summary // ""' "$critique_file" 2>/dev/null || echo "")
   critique_issues=$(jq -c '.issues // []' "$critique_file" 2>/dev/null || echo "[]")
   critique_model=$(jq -r '.model // ""' "$critique_file" 2>/dev/null || echo "")
   critique_confidence=$(jq -r '.confidence // ""' "$critique_file" 2>/dev/null || echo "")
+  critique_checked=$(jq -c '.pitfalls_checked // []' "$critique_file" 2>/dev/null || echo "[]")
+  critique_declared=$(jq -r '.pitfalls_declared // 0' "$critique_file" 2>/dev/null || echo 0)
+  critique_reviewer_verdict=$(jq -r '.reviewer_verdict // ""' "$critique_file" 2>/dev/null || echo "")
 fi
 
 trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict base=${base_ref:0:12}"
@@ -86,6 +92,14 @@ esac
 if [[ -n "$critique_summary" ]]; then echo "           $critique_summary"; fi
 if [[ "$(jq 'length' <<<"$critique_issues")" -gt 0 ]]; then
   jq -r '.[] | "           [\(.severity // "?")] \(.file // "?"): \(.note // "")"' <<<"$critique_issues"
+fi
+if (( critique_declared > 0 )); then
+  echo "           pitfalls:  $(jq 'length' <<<"$critique_checked") of $critique_declared declared examined"
+  jq -r '.[] | "           [\(.status // "?")] \(.pitfall)\(if (.note // "") == "" then "" else " - " + .note end)"' \
+    <<<"$critique_checked"
+fi
+if [[ -n "$critique_reviewer_verdict" && "$critique_reviewer_verdict" != "$critique_verdict" ]]; then
+  echo "           the reviewer said $critique_reviewer_verdict; downgraded to $critique_verdict above"
 fi
 trim_file=$(trim_file_for "$NAME")
 if [[ -f "$trim_file" ]]; then

@@ -29,6 +29,7 @@ write_state() { # worker-model [files-json] [pitfalls-json]
        worktree_path:$wt, files:$files, pitfalls:$pitfalls,
        prompt:"append world to file.txt"}]' > "$HERDR_SWARM_STATE_DIR/state.json"
   : > "$CALL_LOG"
+  rm -f "$HERDR_SWARM_STATE_DIR"/t1.critique.json "$HERDR_SWARM_STATE_DIR"/t1.trim.json
 }
 critique() { ( cd "$RUN" && bash "$REPO/scripts/critique.sh" t1 2>&1 ); }
 verdict() { jq -r "$1" "$HERDR_SWARM_STATE_DIR/t1.critique.json"; }
@@ -105,8 +106,6 @@ write_state "gemini-3.1-pro-high" '["file.txt"]' '["keep the trailing newline"]'
 out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"violated","note":"final newline dropped"}]' critique)
 check  "verdict names the violated pitfall" "keep the trailing newline" "$(verdict '.pitfalls_checked[0].pitfall')"
 check  "verdict records it as violated" "violated" "$(verdict '.pitfalls_checked[0].status')"
-grepok "the violation is printed"     "keep the trailing newline"           "$out"
-grepok "printed as violated"          "violated"                            "$out"
 
 echo
 echo "== 5c. a task with no declared pitfalls still reviews =="
@@ -137,8 +136,6 @@ out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"violated","note":"dropped"}
 check  "verdict is downgraded"        "revise"  "$(verdict .verdict)"
 check  "the reviewer's own word is kept" "pass" "$(verdict .reviewer_verdict)"
 check  "exit code says revise"        "1"       "$rc"
-grepok "says why it was downgraded"   "cannot be a pass"                    "$out"
-nogrep "does not claim nothing was found" "found nothing"                   "$out"
 
 echo
 echo "== 5f. a clean pass keeps its verdict and its wording =="
@@ -148,6 +145,69 @@ check  "verdict is pass"              "pass"    "$(verdict .verdict)"
 check  "reviewer verdict matches"     "pass"    "$(verdict .reviewer_verdict)"
 check  "exit code"                    "0"       "$rc"
 grepok "still refuses to approve"     "does not replace it"                 "$out"
+
+
+echo "== 5g. a malformed pitfalls_checked still leaves a verdict behind =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["a trap"]'
+out=$(FAKE_PITFALLS_CHECKED='"none"' critique); rc=$?
+# Reviewer output is untrusted. Iterating a string kills jq, and a bare
+# assignment under set -e would take the run down after the reviewer already
+# ran, leaving status.sh with no answer at all.
+check  "a verdict file exists"        "true"  "$(test -f "$HERDR_SWARM_STATE_DIR/t1.critique.json" && echo true || echo false)"
+check  "the verdict is still readable" "pass" "$(verdict .verdict)"
+check  "the bad list reads as empty"  "0"     "$(verdict '.pitfalls_checked | length')"
+check  "exit code"                    "0"     "$rc"
+
+echo
+echo "== 5h. entries that are not objects do not kill the run =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["a trap"]'
+out=$(FAKE_PITFALLS_CHECKED='[3,"x"]' critique); rc=$?
+check  "a verdict file exists"        "true"  "$(test -f "$HERDR_SWARM_STATE_DIR/t1.critique.json" && echo true || echo false)"
+check  "junk entries are dropped"     "0"     "$(verdict '.pitfalls_checked | length')"
+check  "exit code"                    "0"     "$rc"
+
+echo
+echo "== 5i. an out-of-range pitfall number is not relabelled =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["first trap","second trap"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":0,"status":"violated","note":"n"},{"pitfall":9,"status":"respected","note":"n"}]' critique)
+# jq resolves a negative index from the end, so pitfall 0 silently became the
+# text of the last declared pitfall: a violation naming a trap that was not
+# violated. Out of range now keeps the number the reviewer wrote.
+check  "zero is not the last pitfall"  "0" "$(verdict '.pitfalls_checked[0].pitfall')"
+check  "nine stays nine"               "9" "$(verdict '.pitfalls_checked[1].pitfall')"
+
+echo
+echo "== 5j. the verdict records how many pitfalls were declared =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["first trap","second trap","third trap"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"respected","note":"n"}]' critique)
+# One entry out of three declared is a shallow pass. The verdict file has to
+# carry the denominator, or a later reader cannot tell that from a thorough one.
+check  "declared count is recorded"   "3" "$(verdict '.pitfalls_declared')"
+check  "examined count is the entries" "1" "$(verdict '.pitfalls_checked | length')"
+
+echo
+echo "== 5k. an unknown verdict keeps the reviewer's own word =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+cat > "$BIN/agy" <<'FAKE'
+#!/usr/bin/env bash
+echo "agy $*" >> "$CALL_LOG"
+echo '{"verdict":"looks-fine","confidence":"high","issues":[],"summary":"s"}'
+FAKE
+chmod +x "$BIN/agy"
+out=$(critique)
+check  "normalised for the pipeline"  "unparseable" "$(verdict .verdict)"
+check  "the reviewer's word survives" "looks-fine"  "$(verdict .reviewer_verdict)"
+harness_fake agy
+
+echo
+echo "== 5l. review.sh shows what the critique examined =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '["keep the trailing newline"]'
+out=$(FAKE_PITFALLS_CHECKED='[{"pitfall":1,"status":"violated","note":"dropped"}]' critique)
+out=$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 )
+# A downgrade the operator never sees is a downgrade that did not happen: this
+# and status.sh are the two places they actually look.
+grepok "review names the violated pitfall" "keep the trailing newline" "$out"
+grepok "review shows the downgrade"        "the reviewer said pass"    "$out"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

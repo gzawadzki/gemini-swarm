@@ -551,8 +551,8 @@ scope, because they generate noise rather than blockers.
 config is numbered in the reviewer's brief as a criterion, and the reply carries
 a `pitfalls_checked` entry per pitfall saying whether the diff respected it,
 violated it, or whether it did not apply. The verdict file resolves those numbers
-back to the pitfall text, so a later reader can tell a thorough pass from a
-shallow one without the task config beside it. This is the fix for a real miss: a
+back to the pitfall text and records `pitfalls_declared`, so a later reader can
+tell a thorough pass from a shallow one without the task config beside it. This is the fix for a real miss: a
 diff where a translated comment stopped describing the code one line below it
 came back `pass`, `confidence: high`, "completely and correctly implemented",
 because the reviewer had nothing specific to look for.
@@ -616,8 +616,12 @@ scripts/review.sh <task-name>
 ```
 
 This prints which model produced the work, which account ran it or whether it
-fell back to codex, the verify status, the critique verdict and its issues, the
-commit log and diffstat for `<branch>` against its base, and the worktree path.
+fell back to codex, the verify status, the critique verdict and its issues, each
+declared pitfall the reviewer examined and what it found, the commit log and
+diffstat for `<branch>` against its base, and the worktree path. The pitfall line
+reads `2 of 3 declared examined`, so a reviewer that skipped most of the traps is
+visible here rather than only in the verdict file; a verdict the script
+downgraded says so, with the reviewer's own word.
 Read the actual diff with `git -C <worktree_path> diff <base>...` before deciding.
 This is the human-in-the-loop step even though Claude is running it, and it is
 what makes auto-approve acceptable in the first place. Then follow section 4

@@ -40,6 +40,7 @@ task_prompt=$(jq -r '.prompt // empty' <<<"$entry")
 # had nothing specific to look for.
 task_pitfalls=$(jq -c '.pitfalls // []' <<<"$entry")
 task_files=$(jq -c '.files // []' <<<"$entry")
+n_files=$(jq 'length' <<<"$task_files")
 n_pitfalls=$(jq 'length' <<<"$task_pitfalls")
 worker_model=$(jq -r '.model // empty' <<<"$entry")
 
@@ -76,13 +77,14 @@ write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
         --arg model "$reviewer_model" --arg kind "$critique_kind" \
         --arg worker_model "$worker_model" --argjson independent "$independent" \
         --arg reviewer_verdict "${reviewer_verdict:-}" \
-        --argjson pitfalls_checked "$checked" \
+        --argjson pitfalls_checked "$checked" --argjson pitfalls_declared "${n_pitfalls:-0}" \
         --argjson truncated "${diff_truncated:-false}" \
         --arg confidence "$confidence" --arg ts "$(date -u +%FT%TZ)" \
     '{verdict: $verdict, confidence: $confidence, model: $model, kind: $kind,
       worker_model: $worker_model, independent: $independent,
       reviewer_verdict: $reviewer_verdict,
-      pitfalls_checked: $pitfalls_checked, diff_truncated: $truncated,
+      pitfalls_checked: $pitfalls_checked, pitfalls_declared: $pitfalls_declared,
+      diff_truncated: $truncated,
       issues: $issues, summary: $summary, ran_at: $ts}' > "$critique_file"
   trace "$NAME" "verdict.write" "$1${confidence:+ (confidence: $confidence)} -> $critique_file"
 }
@@ -137,7 +139,7 @@ $(jq -r 'to_entries[] | "\(.key + 1). \(.value)"' <<<"$task_pitfalls")
 fi
 
 scope_section=""
-if [[ "$(jq 'length' <<<"$task_files")" -gt 0 ]]; then
+if (( n_files > 0 )); then
   scope_section="## The scope the task declared
 
 The task said it would touch these files:
@@ -328,26 +330,41 @@ if ! parsed=$(extract_json < "$reply_file" 2>/dev/null) || ! jq -e . >/dev/null 
 fi
 
 verdict=$(jq -r '.verdict // "unparseable"' <<<"$parsed")
+# Captured before the normalisation below rewrites an unknown verdict, which is
+# the one path where what the reviewer actually said matters most.
+reviewer_verdict="$verdict"
 confidence=$(jq -r '.confidence // ""' <<<"$parsed")
 summary=$(jq -r '.summary // ""' <<<"$parsed")
 issues=$(jq -c '.issues // []' <<<"$parsed")
 # The reviewer answers with the number it was given. Resolve it back to the text
 # here, so the verdict file says what was checked without needing the task config
 # beside it. An out-of-range number keeps whatever the reviewer wrote.
+# The reviewer answers with the number it was given. Resolve it back to the text
+# here, so the verdict file says what was checked without needing the task config
+# beside it. A number outside 1..n keeps whatever the reviewer wrote: jq resolves
+# a negative index from the end, so `0` would otherwise be relabelled as the last
+# declared pitfall - a violation naming a trap that was never violated.
+#
+# Everything here is untrusted reviewer output. A string where an array belongs,
+# or an entry that is not an object, makes jq exit non-zero, and a bare
+# assignment under `set -e` would take the run down after the reviewer has
+# already been paid for, leaving no verdict file at all.
 pitfalls_checked=$(jq -c --argjson declared "$task_pitfalls" '
-    [ (.pitfalls_checked // [])[]
-      | . as $c
-      | .pitfall = ( if (.pitfall | type) == "number" and $declared[.pitfall - 1] != null
-                     then $declared[.pitfall - 1] else .pitfall end ) ]' <<<"$parsed")
+    (.pitfalls_checked? // []) as $raw
+    | (if ($raw | type) == "array" then $raw else [] end)
+    | [ .[]
+        | select(type == "object")
+        | .pitfall = ( if (.pitfall | type) == "number"
+                          and .pitfall >= 1
+                          and .pitfall <= ($declared | length)
+                       then $declared[.pitfall - 1] else .pitfall end ) ]' <<<"$parsed" 2>/dev/null) \
+  || pitfalls_checked="[]"
 
 case "$verdict" in
   pass|revise|reject) ;;
   *) verdict="unparseable"; summary="reviewer returned an unknown verdict" ;;
 esac
 
-# What the reviewer actually said, kept whatever happens next, so a downgrade is
-# auditable rather than a quiet rewrite of someone else's answer.
-reviewer_verdict="$verdict"
 n_violated=$(jq '[.[] | select(.status == "violated")] | length' <<<"$pitfalls_checked")
 if [[ "$verdict" == "pass" ]] && (( n_violated > 0 )); then
   # The brief states that a violated pitfall cannot be a pass, so this reply
@@ -375,10 +392,12 @@ fi
 # in full rather than left to the summary.
 if (( n_pitfalls > 0 )); then
   echo
-  echo "--- pitfalls ($(jq 'length' <<<"$pitfalls_checked") of $n_pitfalls examined) ---"
+  n_checked=$(jq '[.[] | select((.pitfall | type) == "string")] | length' <<<"$pitfalls_checked")
+  (( n_checked <= n_pitfalls )) || n_checked=$n_pitfalls
+  echo "--- pitfalls ($n_checked of $n_pitfalls declared examined) ---"
   jq -r '.[] | "  [\(.status // "?")] \(.pitfall)\(if (.note // "") == "" then "" else " - " + .note end)"' \
     <<<"$pitfalls_checked"
-  if [[ "$(jq '[.[] | select(.status == "violated")] | length' <<<"$pitfalls_checked")" -gt 0 ]]; then
+  if (( n_violated > 0 )); then
     echo
     echo "A declared pitfall was reported as violated. The agent was told about that"
     echo "trap before it started, so treat this as the diff ignoring its brief."
@@ -393,6 +412,12 @@ case "$verdict" in
     exit 0
     ;;
   revise|reject)
+    if (( n_violated > 0 )) && [[ "$reviewer_verdict" == "pass" ]]; then
+      echo "This was the reviewer's own pass, downgraded because it reported a declared"
+      echo "pitfall as violated. Read that entry before bouncing: a cheap model inventing"
+      echo "a violation costs you a round trip that was never needed."
+      echo
+    fi
     echo "Next: send the issues back to the agent, e.g."
     echo "  herdr agent prompt $NAME \"critique found: <paste the issues above>. Fix them and commit.\" --wait"
     echo "Cap this at 2 rounds, then take it to the user."
