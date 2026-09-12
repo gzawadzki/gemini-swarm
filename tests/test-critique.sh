@@ -6,44 +6,8 @@
 # was independent, and that codex reviewers start with plugins off.
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-T="$(mktemp -d)"
-BIN="$T/bin"; mkdir -p "$BIN"
-export LOCALAPPDATA="$T/appdata"; mkdir -p "$LOCALAPPDATA/herdr-swarm"
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"
-
-pass=0; fail=0
-check() { if [[ "$2" == "$3" ]]; then printf 'ok    %-46s %s\n' "$1" "$3"; pass=$((pass+1));
-          else printf 'FAIL  %-46s expected [%s] got [%s]\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
-grepok() { if grep -q -- "$2" <<<"$3"; then printf 'ok    %s\n' "$1"; pass=$((pass+1));
-           else printf 'FAIL  %s (no match for /%s/)\n' "$1" "$2"; fail=$((fail+1)); fi; }
-
-# agy answers /usage with a quota table and anything else with a reply; the
-# reply depends on whether it was handed the critique or the trim brief.
-cat > "$BIN/agy" <<'EOF'
-#!/usr/bin/env bash
-if [[ "$*" == *"/usage"* ]]; then
-  printf 'Gemini Models\tWeekly Limit Remaining\t80%%\t2026-09-04T00:18:35Z\n'
-  printf 'Gemini Models\tFive Hour Limit Remaining\t50%%\t2026-08-30T18:31:35Z\n'
-  exit 0
-fi
-echo "agy $*" >> "$CALL_LOG"
-if [[ "$*" == *overengineering* ]]; then
-  echo 'Sure. {"cuts":[{"file":"file.txt","what":"drop the config flag","why":"never read","saves":"3"}],"summary":"one flag too many"}'
-else
-  echo '```json
-{"verdict":"pass","confidence":"high","issues":[],"summary":"does what was asked"}
-```'
-fi
-EOF
-cat > "$BIN/codex" <<'EOF'
-#!/usr/bin/env bash
-echo "codex $*" >> "$CALL_LOG"
-echo '{"verdict":"pass","confidence":"medium","issues":[],"summary":"fine"}'
-EOF
-chmod +x "$BIN"/*
-export PATH="$BIN:$PATH"
-export CALL_LOG="$T/calls.log"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
+harness_fake agy codex
 export HERDR_ENV=1
 
 SRC="$T/repo"; mkdir -p "$SRC"

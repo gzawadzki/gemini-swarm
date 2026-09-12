@@ -26,9 +26,27 @@ command -v herdr >/dev/null 2>&1 || { echo "ERROR: herdr not found on PATH." >&2
 command -v git >/dev/null 2>&1 || { echo "ERROR: git is required." >&2; exit 1; }
 [[ -f "$TASKS_FILE" ]] || { echo "ERROR: $TASKS_FILE not found." >&2; exit 1; }
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" "$BRIEF_DIR"
 entries_file="$STATE_DIR/.entries.jsonl"
 : > "$entries_file"
+
+# Which version of this skill is about to run. The installed path is a junction
+# to the working repo, so an uncommitted half-rewrite executes live and a run that
+# behaves oddly needs to be attributable to a tree state. This reports, it does
+# not block: during a rebuild the tree is dirty continuously, and blocking would
+# break the edit-and-try loop that the junction exists to allow.
+skill_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+if git -C "$skill_root" rev-parse --git-dir >/dev/null 2>&1; then
+  skill_head=$(git -C "$skill_root" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  skill_dirty=$(git -C "$skill_root" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  if (( skill_dirty > 0 )); then
+    echo "swarm skill: $skill_head plus $skill_dirty uncommitted file(s) - this run is NOT a committed state"
+    git -C "$skill_root" status --porcelain 2>/dev/null | sed 's/^/             /'
+  else
+    echo "swarm skill: $skill_head (clean)"
+  fi
+  trace "-" "skill.state" "$skill_head dirty=$skill_dirty root=$skill_root"
+fi
 
 n_tasks=$(jq '.tasks | length' "$TASKS_FILE")
 echo "Launching $n_tasks task(s) from $TASKS_FILE"
@@ -44,7 +62,14 @@ for i in $(seq 0 $((n_tasks - 1))); do
   prompt=$(jq -r '.prompt' <<<"$task")
   model=$(jq -r '.model // empty' <<<"$task")
   effort=$(jq -r '.effort // empty' <<<"$task")
-  timeout_ms=$(jq -r '.timeout_ms // 30000' <<<"$task")
+  # `timeout_ms` meant two things at once: SKILL.md described waiting for the TUI,
+  # the examples used it as the task's time budget, and herdr only ever read the
+  # first. Anything budget-sized therefore failed the launch with
+  # invalid_agent_timeout. Two fields now; the old name still parses.
+  ready_timeout_ms=$(jq -r ".ready_timeout_ms // .timeout_ms // $DEFAULT_READY_TIMEOUT_MS" <<<"$task")
+  work_budget_ms=$(jq -r ".work_budget_ms // $DEFAULT_WORK_BUDGET_MS" <<<"$task")
+  legacy_timeout=$(jq -r '.timeout_ms // empty' <<<"$task")
+  explicit_ready=$(jq -r '.ready_timeout_ms // empty' <<<"$task")
   verify=$(jq -r '.verify // empty' <<<"$task")
   mapfile -t extra_args < <(jq -r '.args // [] | .[]' <<<"$task")
 
@@ -55,6 +80,15 @@ for i in $(seq 0 $((n_tasks - 1))); do
   [[ -d "$repo" ]] || { echo "ERROR: repo '$repo' for task '$name' does not exist. Skipping." >&2; continue; }
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
     || { echo "ERROR: '$repo' is not a git repo. Skipping task '$name'." >&2; continue; }
+
+  if [[ -n "$legacy_timeout" && -z "$explicit_ready" ]]; then
+    echo "WARN: [$name] 'timeout_ms' is the old name for 'ready_timeout_ms', which is TUI readiness only (max ${MAX_READY_TIMEOUT_MS}). If you meant how long the task may run, use 'work_budget_ms'." >&2
+  fi
+  if (( ready_timeout_ms > MAX_READY_TIMEOUT_MS )); then
+    echo "WARN: [$name] ready_timeout_ms=$ready_timeout_ms is above herdr's ceiling of ${MAX_READY_TIMEOUT_MS}; clamping. Unclamped, herdr rejects the launch with invalid_agent_timeout." >&2
+    trace "$name" "timeout.clamp" "$ready_timeout_ms -> $MAX_READY_TIMEOUT_MS"
+    ready_timeout_ms=$MAX_READY_TIMEOUT_MS
+  fi
 
   if [[ -n "$model" && "$kind" == "gemini" ]]; then
     echo "WARN: [$name] 'model' is set but kind is 'gemini', which has no model menu. Ignoring it." >&2
@@ -174,13 +208,39 @@ for i in $(seq 0 $((n_tasks - 1))); do
   fi
   trace "$name" "worktree.ready" "pane=$pane_id workspace=$workspace_id path=${worktree_path:-unresolved}"
 
-  commit_note="Commit your changes as you go, with descriptive commit messages. Do not leave uncommitted changes at the end. Run 'git status' before finishing and commit or discard anything left over."
+  # Everything the agent needs goes into a file, and the prompt is a one-line
+  # pointer at it. `herdr agent prompt` only reliably delivers a short single
+  # line: a long multi-line brief pasted into the input box comes back
+  # agent_prompted and arrives empty, which looks exactly like a launched task
+  # nobody has reviewed yet. Measured at 6519 bytes, it took two attempts.
+  brief_file="$BRIEF_DIR/${name}.md"
+  brief_native=$(to_native "$brief_file")
+  cat > "$brief_file" <<BRIEF
+# Task: $name
 
-  full_prompt="${prompt}
+$prompt
 
-${commit_note}
+## Ground rules
 
-When you are completely finished, write a JSON file to ${status_file} with the shape {\"status\": \"success\"|\"failure\", \"summary\": \"<short text>\", \"tests_passed\": true|false} as your very last action. Create parent directories if needed."
+- Work only inside this worktree (branch $branch). Do not touch other
+  repositories or the user's other checkouts.
+- Commit your changes as you go, with descriptive commit messages.
+- Do not leave uncommitted changes at the end: run 'git status' before
+  finishing and commit or discard anything left over.
+
+## Result file (required, last action)
+
+When you are completely finished, write a JSON file to:
+
+    $status_file
+
+with exactly this shape:
+
+    {"status": "success", "summary": "<short text>", "tests_passed": true}
+
+status is "success" or "failure", tests_passed is true or false. Create parent
+directories if needed. Write it as your very last action, once the tree is clean.
+BRIEF
 
   # Both accounts start the same way. Which subscription the agent draws on was
   # decided above, by swapping the credential agy reads at start-up; nothing
@@ -188,13 +248,24 @@ When you are completely finished, write a JSON file to ${status_file} with the s
   echo "==> [$name] starting $kind agent${account:+ on account $account} in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
   # One agent failing to start must not abandon the tasks after it, and it must
   # not leave an empty worktree behind either. Tear this one down and carry on.
-  trace "$name" "agent.start" "kind=$kind pane=$pane_id timeout=$timeout_ms args: $autoflag ${model_args[*]-} ${extra_args[*]-}"
-  if ! herdr agent start "$name" --kind "$kind" --pane "$pane_id" --timeout "$timeout_ms" \
+  trace "$name" "agent.start" "kind=$kind pane=$pane_id ready_timeout=$ready_timeout_ms budget=$work_budget_ms args: $autoflag ${model_args[*]-} ${extra_args[*]-}"
+  if ! herdr agent start "$name" --kind "$kind" --pane "$pane_id" --timeout "$ready_timeout_ms" \
        -- "$autoflag" "${model_args[@]}" "${extra_args[@]}" >/dev/null; then
     trace "$name" "agent.start" "failed, tearing the worktree back down"
     echo "ERROR: [$name] $kind did not start. Read the pane with: herdr agent read $name --source recent-unwrapped" >&2
     herdr worktree remove --workspace "$workspace_id" --force >/dev/null 2>&1 \
       || echo "WARN: [$name] could not remove workspace $workspace_id; clean it up by hand." >&2
+    # Removing the worktree leaves the branch behind, and the branch is what
+    # blocks the next attempt: `worktree create` refuses a branch that already
+    # exists, so a failed launch used to need a manual `git branch -D` before
+    # the task could be relaunched.
+    if git -C "$repo" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+      if git -C "$repo" branch -D "$branch" >/dev/null 2>&1; then
+        trace "$name" "rollback" "deleted branch $branch"
+      else
+        echo "WARN: [$name] branch '$branch' is left over and will block a relaunch. Remove it by hand: git -C '$repo' branch -D $branch" >&2
+      fi
+    fi
     continue
   fi
   trace "$name" "agent.start" "started"
@@ -219,7 +290,8 @@ When you are completely finished, write a JSON file to ${status_file} with the s
   fi
 
   echo "==> [$name] sending prompt (not waiting, runs in background)"
-  submit_prompt "$name" "$full_prompt" || echo "ERROR: [$name] prompt was not picked up; resend it by hand." >&2
+  submit_prompt "$name" "Read the file $brief_native and carry out the task it describes in this worktree." \
+    || echo "ERROR: [$name] prompt was not picked up; resend it by hand. The brief is at $brief_file" >&2
 
   # An unset base is an empty string, not null, so `// "HEAD"` would not catch it.
   jq -n --arg name "$name" --arg kind "$kind" --arg repo "$repo" --arg branch "$branch" \
@@ -228,10 +300,13 @@ When you are completely finished, write a JSON file to ${status_file} with the s
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
         --arg model "$model" --arg effort "$effort" --arg account "$account" \
         --arg fallback_from "$fallback_from" --arg verify "$verify" --arg prompt "$prompt" \
+        --arg brief_file "$brief_file" --argjson work_budget_ms "$work_budget_ms" \
+        --argjson started_at "$(date +%s)" \
     '{name: $name, kind: $kind, repo: $repo, branch: $branch, base: $base, base_sha: $base_sha,
       model: $model, effort: $effort, account: $account, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
-      worktree_path: $worktree_path, status_file: $status_file, verify: $verify,
+      worktree_path: $worktree_path, status_file: $status_file, brief_file: $brief_file,
+      work_budget_ms: $work_budget_ms, started_at: $started_at, verify: $verify,
       prompt: $prompt}' \
     >> "$entries_file"
   trace "$name" "state.write" "entry recorded"
@@ -243,5 +318,6 @@ trace "-" "run.end" "$(jq 'length' "$STATE_FILE") of $n_tasks task(s) launched, 
 
 echo
 echo "Launched. State written to $STATE_FILE"
+echo "Briefs: $BRIEF_DIR"
 echo "Check on them with: scripts/status.sh"
 if trace_enabled; then echo "Trace of this run: $(trace_file)"; fi

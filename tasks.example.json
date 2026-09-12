@@ -3,23 +3,23 @@
     {
       "name": "rename-vars",
       "kind": "agy",
-      "model": "gemini-3.8-flash-medium",
+      "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/rename-vars",
       "prompt": "Rename the misleading variable `tmp` to `pending_rows` throughout src/pipeline.py and update any docstrings that reference it.",
       "args": [],
-      "timeout_ms": 300000
+      "work_budget_ms": 300000
     },
     {
       "name": "add-rate-limiter",
       "kind": "agy",
-      "model": "gemini-3.1-pro-high",
+      "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/add-rate-limiter",
       "prompt": "Add a token-bucket rate limiter middleware to src/api/middleware.py, with a unit test in tests/test_rate_limiter.py. Run the new test and make sure it passes.",
       "args": [],
       "verify": "pytest -q tests/test_rate_limiter.py",
-      "timeout_ms": 1200000
+      "work_budget_ms": 900000
     },
     {
       "name": "security-review",
@@ -29,18 +29,18 @@
       "branch": "agent/security-review",
       "prompt": "Review src/auth/ for authentication and authorization vulnerabilities: session handling, token validation, privilege escalation. Fix anything you find with high confidence and add a regression test for each fix.",
       "args": [],
-      "timeout_ms": 1800000
+      "work_budget_ms": 1800000
     },
     {
       "name": "port-config-loader",
       "kind": "codex",
       "model": "gpt-5.6-luna",
-      "effort": "xhigh",
+      "effort": "max",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/port-config-loader",
       "prompt": "Port src/config/loader.py from the old YAML schema to the new TOML one, keeping the public API unchanged. Update the tests in tests/test_config.py and run them.",
       "args": [],
-      "timeout_ms": 1800000
+      "work_budget_ms": 1800000
     },
     {
       "name": "fix-auth-bug",
@@ -50,7 +50,8 @@
       "prompt": "Fix the failing test in tests/test_auth.py. Then run `pytest tests/test_auth.py` and confirm it passes.",
       "args": [],
       "verify": "pytest -q tests/test_auth.py",
-      "timeout_ms": 900000
+      "ready_timeout_ms": 120000,
+      "work_budget_ms": 900000
     }
   ]
 }

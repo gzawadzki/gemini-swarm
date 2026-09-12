@@ -7,19 +7,7 @@
 # a stub .ps1 that only returns an exit code.
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-T="$(mktemp -d)"
-export LOCALAPPDATA="$T/appdata"
-mkdir -p "$LOCALAPPDATA/herdr-swarm"
-
-pass=0; fail=0
-check() { # check <label> <expected> <actual>
-  if [[ "$2" == "$3" ]]; then
-    printf 'ok    %-52s %s\n' "$1" "$3"; pass=$((pass+1))
-  else
-    printf 'FAIL  %-52s expected [%s] got [%s]\n' "$1" "$2" "$3"; fail=$((fail+1))
-  fi
-}
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
 
 # shellcheck source=/dev/null
 source "$REPO/scripts/lib.sh"

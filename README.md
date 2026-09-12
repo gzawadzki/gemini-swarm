@@ -43,13 +43,13 @@ writes the config and drives the scripts. To do it manually:
     {
       "name": "fix-auth-bug",
       "kind": "agy",
-      "model": "gemini-3.1-pro-high",
+      "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest and report the result.",
       "args": [],
       "verify": "pytest -q tests/test_auth.py",
-      "timeout_ms": 900000
+      "work_budget_ms": 900000
     }
   ]
 }
@@ -240,7 +240,7 @@ So `launch.sh` reads `agy -p "/usage"` before it starts anything. If the pool a
 task's model draws from reads 0% in either window, the swarm switches the live
 Antigravity account and runs the task on the other subscription. If that one is
 empty too, or there is no second account, the task runs on `codex` with
-`gpt-5.6-luna` at `xhigh` reasoning effort instead. Other tasks are unaffected,
+`gpt-5.6-luna` at `max` reasoning effort instead. Other tasks are unaffected,
 so a Claude task keeps running on the live account after the Gemini pool empties.
 If the quota cannot be read, the task stays on the live account and the script
 warns rather than guessing.
@@ -253,7 +253,7 @@ actually did the work.
 |----------|--------|
 | `HERDR_SWARM_NO_FALLBACK=1` | Never fall back to codex; when no account has quota the task is not launched and the script reports when each account refills. |
 | `HERDR_SWARM_CODEX_MODEL` | Model the fallback runs, default `gpt-5.6-luna`. |
-| `HERDR_SWARM_CODEX_EFFORT` | Reasoning effort, default `xhigh`. |
+| `HERDR_SWARM_CODEX_EFFORT` | Reasoning effort, default `max`. |
 | `HERDR_SWARM_CODEX_PLUGINS=1` | Keep codex plugins on. By default every swarm codex runs with `--disable plugins`, so plugins like caveman cannot rewrite how a worker or reviewer writes. `~/.codex/AGENTS.md` still loads. |
 
 Only the live account's quota can be read, because `/usage` answers for whoever
