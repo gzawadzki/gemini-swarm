@@ -38,7 +38,7 @@ log_file="${verify_file%.json}.log"
 # ask - no command to run, or a command that failed - say exactly that, because
 # an empty field reads like an answer.
 SOUNDNESS="not checked"
-SOUNDNESS_DETAIL="the verify command did not pass, so where the code resolved from was not asked"
+SOUNDNESS_DETAIL="resolution was not established"
 
 trace "$NAME" "cmd.resolve" \
   "${cmd:-<none>} (source: $([[ -n "$verify_from_task" ]] && echo "tasks.json" || echo "detected from $worktree_path"))"
@@ -54,6 +54,7 @@ if [[ -z "$cmd" ]]; then
   echo "=== $NAME: verify SKIPPED ==="
   echo "No 'verify' field on the task and no known test command in $worktree_path."
   echo "Set a \"verify\" command in tasks.json, or review the diff by hand."
+  SOUNDNESS_DETAIL="there was no verify command to run, so nothing was established about which tree would have run it"
   write_result "skipped" ""
   trace "$NAME" "cmd.exec" "skipped, no verify command"
   echo "Nothing was proven here, so the critique is the only gate left:"
@@ -126,9 +127,26 @@ if [[ "$rc" -eq 0 ]]; then
   fi
 else
   echo "VERIFY FAIL (exit $rc): $cmd"
+  # Ask where the code resolved from here too. An install pinned to another
+  # checkout makes new tests in the worktree fail against old code, and a bare
+  # failure sends the agent to fix a diff that was never the problem.
+  if [[ "${HERDR_SWARM_NO_SOUNDNESS:-0}" == "1" ]]; then
+    SOUNDNESS="disabled"
+    SOUNDNESS_DETAIL="HERDR_SWARM_NO_SOUNDNESS=1"
+  else
+    check_verify_soundness "$worktree_path"
+    trace "$NAME" "soundness" "$SOUNDNESS: $SOUNDNESS_DETAIL"
+  fi
   write_result "fail" "$cmd"
   echo "Full output: $log_file"
-  echo "Next: send the failure back to the agent, e.g."
-  echo "  herdr agent prompt $NAME \"verify failed: $cmd. Fix it and rerun.\" --wait"
+  if [[ "$SOUNDNESS" == "unsound" ]]; then
+    echo "Before you bounce this: the code under test did not come from this worktree."
+    echo "  $SOUNDNESS_DETAIL"
+    echo "Tests failing against another checkout's code is an environment problem, not"
+    echo "the agent's diff. Fix the install or the path, then rerun."
+  else
+    echo "Next: send the failure back to the agent, e.g."
+    echo "  herdr agent prompt $NAME \"verify failed: $cmd. Fix it and rerun.\" --wait"
+  fi
 fi
 exit "$rc"

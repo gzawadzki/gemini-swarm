@@ -605,8 +605,14 @@ check_verify_soundness() {  # <worktree>
   fi
 
   # The distribution name, turned into the module name the way packaging does.
-  local module
-  module=$(sed -n 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$pyproject" | head -1)
+# `sed ... | head -1` looked equivalent and was not: head closes the pipe once it
+  # has its line, sed takes SIGPIPE, and under `set -o pipefail` the bare
+  # assignment goes non-zero, so `set -e` kills verify.sh after the tests ran and
+  # before any result is cached. Measured: exit 141, no result file.
+  local module names=()
+  mapfile -t names < <(sed -n -e "s/^[[:space:]]*name[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+                              -e "s/^[[:space:]]*name[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" "$pyproject")
+  module="${names[0]:-}"
   module=${module//-/_}
   module=${module//./_}
   if [[ -z "$module" ]]; then
@@ -616,14 +622,29 @@ check_verify_soundness() {  # <worktree>
 
   # find_spec rather than import: it answers the same question without running
   # the package's import side effects inside the gate.
-  local origin
-  origin=$(cd "$worktree" && python -c \
+  #
+  # Run from anywhere except the worktree. `python -c` puts its working directory
+  # first on sys.path, so probing inside the worktree finds the worktree's own
+  # package whatever the installed distribution points at - measured: with an
+  # install pinned to another checkout, the same probe answered "worktree" from
+  # the worktree and "other checkout" from outside it. Probing in the worktree
+  # therefore fails towards `sound`, which is the one answer this check exists to
+  # be unable to give falsely.
+  local origin probe_rc=0
+  origin=$(cd / && python -c \
     "import importlib.util as u
 s = u.find_spec('$module')
-print(s.origin if s and s.origin else '')" 2>/dev/null) || origin=""
+print(s.origin if s and s.origin else '')" 2>/dev/null) || probe_rc=$?
   origin=${origin%$'\r'}
+  if (( probe_rc != 0 )); then
+    SOUNDNESS_DETAIL="python exited $probe_rc while resolving module '$module', so nothing was established"
+    return 0
+  fi
   if [[ -z "$origin" ]]; then
-    SOUNDNESS_DETAIL="module '$module' could not be resolved, so where the tests imported it from is unknown"
+    # A flat-layout project with no install lands here: the suite may well import
+    # correctly from its own directory, but nothing about that is established
+    # from outside it, and a guess in either direction would be a claim.
+    SOUNDNESS_DETAIL="module '$module' could not be resolved from outside the worktree, so where the tests imported it from is unknown"
     return 0
   fi
 

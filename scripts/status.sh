@@ -89,8 +89,10 @@ for i in $(seq 0 $((n - 1))); do
   verify_file=$(verify_file_for "$name")
   if [[ -f "$verify_file" ]]; then
     verify=$(jq -r '.status // "?"' "$verify_file" 2>/dev/null || echo "?")
+    verify_soundness=$(jq -r '.soundness // ""' "$verify_file" 2>/dev/null || echo "")
   else
     verify="-"
+    verify_soundness=""
   fi
 
   # Same deal for CRITIQUE: cached by critique.sh, never computed here. No agent
@@ -125,6 +127,10 @@ for i in $(seq 0 $((n - 1))); do
     next_lines+=("$name: not review-ready (result=$result clean=$clean) -> scripts/logs.sh $name")
   elif [[ "$verify" == "-" ]]; then
     next_lines+=("$name: ready to verify -> scripts/verify.sh $name")
+  elif [[ "$verify" == "fail" && "$verify_soundness" == "unsound" ]]; then
+    # The tests may be fine: the code they ran was not this worktree's. Bouncing
+    # this sends the agent to fix a diff that was never the problem.
+    next_lines+=("$name: verify failed on resolution, not on the tests -> scripts/verify.sh $name for the detail; fix the install or path inside the worktree, do not re-prompt the agent")
   elif [[ "$verify" == "fail" ]]; then
     next_lines+=("$name: verify failed -> scripts/logs.sh $name, then re-prompt the agent")
   elif [[ "$critique" == "-" ]]; then

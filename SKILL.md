@@ -268,7 +268,9 @@ Pipeline, in order:
    auto-detected test/build) inside the worktree and caches pass/fail. This is a
    deterministic filter that costs zero of your tokens: a task that broke the
    build or failed its own tests should never reach your eyes. Send failures
-   straight back to the agent (step 7) instead of reading the diff.
+   straight back to the agent (step 7) instead of reading the diff — unless the
+   failure was the resolution check rather than the tests, which is an
+   environment problem the agent cannot fix. Section 8 has the distinction.
 5. **Then run the machine critique**, `scripts/critique.sh <name>`. A cheap model
    on the swarm pool reads the diff against the task's own prompt and answers the
    question verify cannot: is this the change that was asked for. The reviewer is
@@ -287,7 +289,10 @@ Pipeline, in order:
 7. **Send fixes back to the same agent** with
    `herdr agent prompt <name> "<specific fix>" --wait` rather than rewriting the
    code yourself, since it already has the context. A verify failure is the
-   clearest thing to bounce back: paste the failing command and its output. A
+   clearest thing to bounce back: paste the failing command and its output. The
+   exception is a failure on resolution rather than on the tests (section 8):
+   fix the environment instead, or the agent spends a round trip on a diff that
+   was never wrong. A
    critique `revise` is the next clearest: paste its issue list verbatim. Cap this
    at 2 review-fix rounds per task, then surface the problem to the user instead
    of re-prompting forever.

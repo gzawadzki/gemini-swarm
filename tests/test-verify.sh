@@ -66,7 +66,6 @@ check  "soundness recorded"   "unsound" "$(result .soundness)"
 grepok "names the module"     "demo_pkg"                 "$out"
 grepok "names where it resolved from" "main-checkout"    "$out"
 # An editable-install problem must not read as a broken test suite.
-grepok "says the tests themselves passed" "command itself passed" "$out"
 check  "the detail is kept for later" "true" "$(result '.soundness_detail | test("main-checkout")')"
 
 echo
@@ -80,8 +79,6 @@ check  "exit code"            "0"         "$rc"
 # something it did not check.
 check  "status"               "skipped"   "$(result .status)"
 check  "soundness recorded"   "unknown"   "$(result .soundness)"
-nogrep "does not claim a pass" "VERIFY PASS" "$out"
-grepok "says the command passed anyway" "command itself passed" "$out"
 grepok "still moves on to the critique" "critique.sh t1" "$out"
 
 echo
@@ -118,13 +115,15 @@ check  "status"               "skipped"   "$(result .status)"
 grepok "explains there is nothing to run" "no known test command" "$out"
 
 echo
-echo "== 7. a not-checked result says so rather than leaving the field blank =="
+echo "== 7. a failing command whose code did resolve locally is the agent's problem =="
 make_python_project
 write_state "false"
+export FAKE_PY_ORIGIN="$(native "$WT")/demo_pkg/__init__.py"
 out=$(verify) || true
-# The command failed, so resolution was never asked about. An empty field would
-# read the same as "checked and found nothing", which is a different claim.
-check  "soundness is explicit" "not checked" "$(result .soundness)"
+# The tests ran on this worktree's code and still failed, so the diff is what is
+# broken. Distinguishing this from scenario 10 is the whole point of asking.
+check  "soundness is explicit" "sound" "$(result .soundness)"
+grepok "sends it back to the agent" "herdr agent prompt" "$out"
 
 echo
 echo "== 8. review.sh tells an unsound gate apart from a broken suite =="
@@ -147,5 +146,71 @@ out=$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 )
 # someone who cannot fix it.
 grepok "names the resolution problem" "outside the worktree" "$out"
 nogrep "does not blame the agent"     "re-prompt the agent"  "$out"
+
+echo
+echo "== 9. the probe does not run from the worktree =="
+make_python_project
+write_state "true"
+# An editable install pinned to the main checkout, in a flat-layout project:
+# probing from the worktree would answer "worktree" and call it sound, which is
+# the one failure mode this ticket forbids.
+export FAKE_PY_WORKTREE="$WT"
+export FAKE_PY_ORIGIN_CWD="$(native "$WT")/demo_pkg/__init__.py"
+export FAKE_PY_ORIGIN="$(native "$MAIN")/demo_pkg/__init__.py"
+out=$(verify) || true
+check  "not fooled by cwd resolution" "unsound" "$(result .soundness)"
+check  "status"                       "fail"    "$(result .status)"
+nogrep "probe avoided the worktree"   "python(cwd=$WT)" "$(cat "$CALL_LOG")"
+unset FAKE_PY_ORIGIN_CWD FAKE_PY_WORKTREE
+
+echo
+echo "== 10. a failing command still gets its resolution established =="
+make_python_project
+write_state "false"
+export FAKE_PY_ORIGIN="$(native "$MAIN")/demo_pkg/__init__.py"
+out=$(verify); rc=$?
+# The wrong tree makes tests fail as readily as pass: new tests in the worktree
+# run against old code from the main checkout. Reporting a bare fail sends the
+# agent to fix a diff that was never the problem.
+check  "exit code"              "1"       "$rc"
+check  "status"                 "fail"    "$(result .status)"
+check  "resolution was established" "unsound" "$(result .soundness)"
+grepok "review advises the environment" "outside the worktree" \
+  "$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 || true )"
+
+echo
+echo "== 11. each undeterminable branch is reported, and none of them pass =="
+write_state "true"
+# no project name in the manifest
+printf '[project]\nversion = "0.1.0"\n' > "$WT/pyproject.toml"
+out=$(verify) || true
+check  "no name -> skipped"     "skipped" "$(result .status)"
+check  "no name -> unknown"     "unknown" "$(result .soundness)"
+check  "the detail says which"  "true"    "$(result '.soundness_detail | test("no project name")')"
+# a name that resolves to nothing
+make_python_project
+write_state "true"
+export FAKE_PY_ORIGIN=""
+out=$(verify) || true
+check  "unresolvable -> skipped" "skipped" "$(result .status)"
+check  "the detail says which"   "true"    "$(result '.soundness_detail | test("could not be resolved")')"
+# a manifest that quotes the name the other legal way
+printf "[project]\nname = 'demo-pkg'\nversion = '0.1.0'\n" > "$WT/pyproject.toml"
+export FAKE_PY_ORIGIN="$(native "$WT")/demo_pkg/__init__.py"
+write_state "true"
+out=$(verify) || true
+check  "single-quoted name is read" "sound" "$(result .soundness)"
+
+echo
+echo "== 12. no verify command: the detail does not claim a command failed =="
+rm -f "$WT/pyproject.toml"
+write_state ""
+out=$(verify) || true
+check  "status"                 "skipped" "$(result .status)"
+# The default sentence was written for the command-failed path; reaching it here
+# would cache a false explanation of why nothing was established.
+check  "detail fits this path"  "true"    "$(result '.soundness_detail | test("no verify command")')"
+check  "nothing was asked here" "not checked" "$(result .soundness)"
+nogrep "does not blame a command" "did not pass" "$(result .soundness_detail)"
 
 harness_summary

@@ -47,6 +47,15 @@ Capped by herdr at 300000; above that the launch fails with
 Neither **approves** — a passing gate has never meant mergeable, and a real defect
 has passed both.
 
+**Soundness** — whether the code a verify command exercised resolved inside the
+task's own worktree. `sound` was established, `unsound` resolved somewhere else,
+`unknown` could not be established at all, `disabled` means the check was turned
+off with `HERDR_SWARM_NO_SOUNDNESS=1`, and `not checked` means nothing asked.
+Only `sound` may render as a `pass`: the check exists because an editable install
+can pin imports to another checkout, and a gate that reports green for code it
+never ran is worse than no gate. See [ADR 0002](docs/adr/0002-required-files-and-pitfalls.md)
+for the sibling rule about recon, and section 8 of SKILL.md for the mechanism.
+
 **Run** — one `launch.sh` invocation and everything it produced: the task config,
 the traces, the briefs, the results and the diffs. Archived under
 `~/.herdr/runs/<timestamp>/`, because `cleanup.sh` used to delete the evidence a

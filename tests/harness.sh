@@ -183,9 +183,18 @@ FAKE
 _harness_fake_python() {
   cat > "$BIN/python" <<'FAKE'
 #!/usr/bin/env bash
-echo "python $*" >> "$CALL_LOG"
-printf '%s
-' "${FAKE_PY_ORIGIN:-}"
+echo "python(cwd=$PWD) $*" >> "$CALL_LOG"
+# Answering differently by cwd is the point. `python -c` puts its working
+# directory first on sys.path, so a probe run inside the worktree finds the
+# worktree's own package whatever the installed distribution points at.
+# $FAKE_PY_ORIGIN_CWD is that misleading answer; $FAKE_PY_ORIGIN is what the
+# environment really resolves. The trailing CR the real python emits on this
+# platform is reproduced deliberately, because the caller has to strip it.
+if [[ -n "${FAKE_PY_ORIGIN_CWD:-}" && "$PWD" == "${FAKE_PY_WORKTREE:-/nonexistent}" ]]; then
+  printf '%s\r\n' "$FAKE_PY_ORIGIN_CWD"
+else
+  printf '%s\r\n' "${FAKE_PY_ORIGIN:-}"
+fi
 FAKE
 }
 
