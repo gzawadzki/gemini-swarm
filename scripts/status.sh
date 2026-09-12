@@ -113,6 +113,7 @@ for i in $(seq 0 $((n - 1))); do
   # Scope and size are read from git, not from a gate: no agent is spawned and
   # nothing is executed, so a status poll stays free.
   scope_report "$entry" "$worktree_path"
+  trace "$name" "scope.read" "strays=$SCOPE_STRAY_COUNT lines=$SCOPE_LINES oversize=${SCOPE_OVERSIZE:-no}"
   scope_block=$(scope_lines "")
   if [[ -n "$scope_block" ]]; then
     scope_lines_out+=("$name:")

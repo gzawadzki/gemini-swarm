@@ -155,4 +155,73 @@ out=$(status)
 grepok "an ordinary failure still bounces" "re-prompt the agent"        "$out"
 rm -f "$HERDR_SWARM_STATE_DIR/t1.verify.json"
 
+echo
+echo "== 9. an ordinary diff a little over the guideline is not called out =="
+reset_worktree
+python -c "
+import sys
+open(sys.argv[1], 'w').write('\n'.join('line %d' % i for i in range(450)))
+" "$WT/declared.txt"
+git -C "$WT" commit -qam over
+write_state '["declared.txt"]'
+out=$(status)
+# 450 lines is a well-sized task that ran a little long. Announcing it as too
+# wide is the false traffic that teaches an operator to skim past the block.
+nogrep "no call-out just above the aim" "lines changed" "$out"
+# And well past it, the call-out still fires: asserted either side of the
+# threshold, because a fixture far from the boundary cannot tell the two apart.
+reset_worktree
+python -c "
+import sys
+open(sys.argv[1], 'w').write('\n'.join('line %d' % i for i in range(800)))
+" "$WT/declared.txt"
+git -C "$WT" commit -qam wide
+write_state '["declared.txt"]'
+out=$(status)
+grepok "well past the aim is called out" "80[0-9] lines changed" "$out"
+
+echo
+echo "== 10. the reader answers directly, not only through the views =="
+# The views print prose; these assert the values the shared reader produced, so
+# a rewording cannot hide a behaviour change.
+reset_worktree
+printf 'two\n' >> "$WT/declared.txt"
+printf 'x\n' > "$WT/strayed.txt"
+git -C "$WT" add -A && git -C "$WT" commit -qm c
+# One jq, no process substitution: jq is a native binary and cannot open the
+# /dev/fd path bash hands it, so the entry came back empty and the reader was
+# asked about a task with no declared files at all.
+entry=$(jq -n --arg wt "$WT" --arg sha "$BASE_SHA" \
+  '{name:"t1", base_sha:$sha, worktree_path:$wt, files:["declared.txt"]}')
+( source "$REPO/scripts/lib.sh"
+  scope_report "$entry" "$WT"
+  printf '%s|%s|%s\n' "$SCOPE_STRAYS" "$SCOPE_STRAY_COUNT" "$SCOPE_READABLE" ) > "$T/reader.out"
+check "the reader names the stray" "strayed.txt|1|yes" "$(cat "$T/reader.out")"
+
+echo
+echo "== 11. a renamed file is not reported as a stray =="
+reset_worktree
+mkdir -p "$WT/sub"
+git -C "$WT" mv declared.txt "sub/moved name.txt"
+git -C "$WT" commit -qm rename
+write_state '["sub/moved name.txt"]'
+out=$(status)
+# The plain numstat renders a rename as `old => new` in the path field and
+# C-quotes any path with a space, so both shapes compared unequal to every
+# declared entry and every rename came out a stray.
+nogrep "the rename is not a stray" "outside the declared list" "$out"
+
+echo
+echo "== 12. a diff that cannot be read reports nothing rather than 'no strays' =="
+reset_worktree
+printf 'two\n' >> "$WT/declared.txt"
+git -C "$WT" commit -qam c
+entry=$(jq -n --arg wt "$WT" '{name:"t1", base_sha:"0000000000000000000000000000000000000000", worktree_path:$wt, files:["declared.txt"]}')
+( source "$REPO/scripts/lib.sh"
+  scope_report "$entry" "$WT"
+  printf '%s|%s\n' "${SCOPE_READABLE:-no}" "$SCOPE_LINES" ) > "$T/unreadable.out"
+# Silence and "I read it and found nothing" are different answers; the reader
+# must not give the second when it could not read the diff.
+check "unreadable stays unreadable" "no|0" "$(cat "$T/unreadable.out")"
+
 harness_summary

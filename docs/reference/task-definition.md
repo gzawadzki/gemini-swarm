@@ -151,7 +151,11 @@ schema above; they are why the fields are shaped the way they are.
   ran.
 - **Aim at a diff of about 400 lines.** Above that you stop reading it properly,
   which is the point of the number. Split anything you estimate above it, before
-  the work rather than after.
+  the work rather than after. `status.sh` and `review.sh` call out a diff that
+  landed well past the aim — half again above it, so an ordinary task that runs a
+  little long stays quiet. `HERDR_SWARM_DIFF_LINES` moves the aim for a project
+  whose slices are honestly wider; it changes what is reported, never what is
+  allowed.
 - **Do not write the commit discipline or the result-file contract.** `launch.sh`
   generates those, along with the constraints section. Do not put the
   auto-approve flag in the prompt text either.

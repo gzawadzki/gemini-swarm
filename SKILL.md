@@ -504,9 +504,13 @@ three line up: herdr `idle` or `done`, `status: success`, and a clean tree. An
 agent name ending in `@B` ran on the second Antigravity account, because the
 first was at 0% when it was launched; one ending in `*` fell back to codex.
 
-Before that comes a **SCOPE** block, and only when there is something to say:
-the files a task changed that its declared `files` did not cover, and the diff's
-size when it ran past the roughly-400-line guideline. Both are advisory and
+The output ends with two blocks. The first is **SCOPE**, printed only when there
+is something to say: the files a task changed that its declared `files` did not
+cover, and the diff's size when it ran well past the 400-line guideline. The
+call-out threshold sits half again above the guideline, so an ordinary task that
+lands a little over does not trigger it — a report that fires on well-sized work
+is a report nobody reads. `HERDR_SWARM_DIFF_LINES` moves the guideline, and the
+threshold follows it. Both are advisory and
 neither blocks a task. A stray is usually legitimate — a new test file, a package
 import — so read the line and move on; a false bounce costs more than that. An
 oversized diff is already written by the time you see it, so the call-out is for
@@ -515,7 +519,7 @@ guideline prints nothing here at all, which is what makes the block worth readin
 when it does appear. The same lines come from the same reader in `review.sh`
 (section 10), so the two views cannot disagree.
 
-The output ends with a **NEXT** block: one prescriptive command per task
+Then comes the **NEXT** block: one prescriptive command per task
 (`logs.sh`, `verify.sh`, `critique.sh`, or `review.sh`). Follow it rather than
 re-deriving the state yourself — that is the point of the block. It never runs
 the verify check or the critique itself, so reading status stays free and never

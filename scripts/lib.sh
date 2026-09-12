@@ -583,6 +583,7 @@ detect_verify_cmd() {
 #
 # Sets:
 #   SCOPE_STRAYS    files touched that no declared entry covers, newline separated
+#   SCOPE_STRAY_COUNT  how many, so a caller need not count the text
 #   SCOPE_LINES     added plus deleted lines across the whole diff
 #   SCOPE_OVERSIZE  yes when SCOPE_LINES is above the guideline, else empty
 #   SCOPE_READABLE  yes when the diff could be read at all; nothing is reported
@@ -592,11 +593,22 @@ detect_verify_cmd() {
 # to match the path exactly. Nothing declared means nothing can be outside it,
 # which keeps tasks written before the schema silent instead of listing every
 # file they touched.
-SCOPE_SIZE_LIMIT="${HERDR_SWARM_DIFF_LINES:-400}"
+# Two numbers, not one. The aim is what a task should be written to fit; the
+# call-out threshold is where a diff is wide enough to say the task was more than
+# one slice. Collapsing them makes a 410-line diff - an ordinary well-sized task -
+# announce that it was too wide, which is the false traffic that teaches an
+# operator to stop reading the report.
+#
+# HERDR_SWARM_DIFF_LINES moves the aim for a project whose slices are honestly
+# wider, and the threshold follows it. Neither value blocks anything at any
+# setting: this reports, it never refuses.
+SCOPE_SIZE_AIM="${HERDR_SWARM_DIFF_LINES:-400}"
+SCOPE_SIZE_LIMIT=$(( SCOPE_SIZE_AIM * 3 / 2 ))
 
 scope_report() {  # <entry> <worktree>
   local entry="$1" worktree="$2"
   SCOPE_STRAYS=""
+  SCOPE_STRAY_COUNT=0
   SCOPE_LINES=0
   SCOPE_OVERSIZE=""
   SCOPE_READABLE=""
@@ -605,8 +617,23 @@ scope_report() {  # <entry> <worktree>
   local base_ref
   base_ref=$(resolve_base_ref "$entry" "$worktree") || return 0
 
+  # Through a file rather than a process substitution, for two reasons. `mapfile`
+  # reports its own exit status, never the substituted command's, so
+  # `mapfile < <(git ...) || return` can never fire: a failed git would yield zero
+  # rows and be reported as "nothing outside the declared files", which is the one
+  # answer this reader must not invent. And `-z` output carries NUL bytes, which a
+  # command substitution cannot hold at all.
   local rows=() row add del path
-  mapfile -t rows < <(git -C "$worktree" diff --numstat "${base_ref}...HEAD" 2>/dev/null) || return 0
+  local raw; raw=$(mktemp 2>/dev/null) || return 0
+  if ! git -C "$worktree" diff --numstat -z "${base_ref}...HEAD" >"$raw" 2>/dev/null; then
+    rm -f "$raw"
+    return 0
+  fi
+  # -z because the plain form renders a rename as `old => new` in the path field
+  # and C-quotes any path with a space, a tab or a non-ASCII byte: both shapes
+  # compare unequal to every declared entry, so every rename came out a stray.
+  mapfile -d '' -t rows < "$raw"
+  rm -f "$raw"
   SCOPE_READABLE="yes"
 
   # jq ends every line with CRLF here, and mapfile keeps the CR - the rule at the
@@ -617,14 +644,22 @@ scope_report() {  # <entry> <worktree>
   mapfile -t declared < <(jq -r '.files // [] | .[]' <<<"$entry" 2>/dev/null)
   for i in "${!declared[@]}"; do declared[$i]=${declared[$i]%$'\r'}; done
 
-  for row in ${rows[@]+"${rows[@]}"}; do
-    # git writes numstat as <added>\t<deleted>\t<path>. Split with parameter
-    # expansion rather than a multi-field `read`: the lib rule at the top of this
-    # file applies to any line that might arrive with a trailing CR.
-    row=${row%$'\r'}
+  local i=0 n_rows=${#rows[@]}
+  while (( i < n_rows )); do
+    # `i=$(( i + 1 ))`, never `(( i++ ))`: post-increment evaluates to the old
+    # value, so the arithmetic command returns 1 when i is 0 and `set -e` kills
+    # the caller after the status table has already printed.
+    row=${rows[$i]}; i=$(( i + 1 ))
     [[ -n "$row" ]] || continue
+    # Each record is <added> TAB <deleted> TAB <path>. A rename leaves the path
+    # empty and follows with two more records, the old name then the new one.
     add=${row%%$'\t'*}; row=${row#*$'\t'}
     del=${row%%$'\t'*}; path=${row#*$'\t'}
+    if [[ -z "$path" ]]; then
+      (( i < n_rows )) && i=$(( i + 1 ))
+      if (( i < n_rows )); then path=${rows[$i]}; i=$(( i + 1 )); fi
+      [[ -n "$path" ]] || continue
+    fi
     # A binary file reports "-" for both counts and contributes no lines.
     [[ "$add" == "-" ]] && add=0
     [[ "$del" == "-" ]] && del=0
@@ -643,6 +678,7 @@ scope_report() {  # <entry> <worktree>
     [[ -n "$covered" ]] || strays+=("$path")
   done
 
+  SCOPE_STRAY_COUNT=${#strays[@]}
   (( ${#strays[@]} > 0 )) && SCOPE_STRAYS=$(printf '%s\n' "${strays[@]}")
   (( SCOPE_LINES > SCOPE_SIZE_LIMIT )) && SCOPE_OVERSIZE="yes"
   return 0
@@ -655,12 +691,13 @@ scope_lines() {  # <prefix>
   local prefix="${1:-}"
   [[ -n "$SCOPE_READABLE" ]] || return 0
   if [[ -n "$SCOPE_STRAYS" ]]; then
+    # One line per finding. Each view says "advisory" once in its own header:
+    # repeating it per task teaches the operator to skim past the block.
     printf '%soutside the declared list: %s\n' "$prefix" "$(tr '\n' ' ' <<<"$SCOPE_STRAYS" | sed 's/ $//')"
-    printf '%s(advisory: a new test file or an import is legitimate, read the line and move on)\n' "$prefix"
   fi
   if [[ -n "$SCOPE_OVERSIZE" ]]; then
-    printf '%s%s lines changed, above the %s-line guideline: the task was wider than one slice\n' \
-      "$prefix" "$SCOPE_LINES" "$SCOPE_SIZE_LIMIT"
+    printf '%s%s lines changed, well past the %s-line guideline: the task was wider than one slice\n' \
+      "$prefix" "$SCOPE_LINES" "$SCOPE_SIZE_AIM"
   fi
   return 0
 }

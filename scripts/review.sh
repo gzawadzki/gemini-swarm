@@ -74,7 +74,7 @@ if [[ -f "$critique_file" ]]; then
 fi
 
 scope_report "$entry" "$worktree_path"
-trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict base=${base_ref:0:12} strays=$(wc -w <<<"$SCOPE_STRAYS" | tr -d " ") lines=$SCOPE_LINES"
+trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict base=${base_ref:0:12} strays=$SCOPE_STRAY_COUNT lines=$SCOPE_LINES"
 
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
@@ -124,7 +124,7 @@ if [[ -f "$trim_file" ]]; then
 fi
 scope_out=$(scope_lines "           ")
 if [[ -n "$scope_out" ]]; then
-  echo "scope:     what this task touched beyond what it declared"
+  echo "scope:     what this task touched beyond what it declared (advisory, nothing here blocks)"
   echo "$scope_out"
 fi
 echo "branch:    $branch"
