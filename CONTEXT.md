@@ -60,7 +60,8 @@ off with `HERDR_SWARM_NO_SOUNDNESS=1`, and `not checked` means nothing asked.
 Only `sound` may render as a `pass`: the check exists because an editable install
 can pin imports to another checkout, and a gate that reports green for code it
 never ran is worse than no gate. See [ADR 0002](docs/adr/0002-required-files-and-pitfalls.md)
-for the sibling rule about recon, and section 8 of SKILL.md for the mechanism.
+for the sibling rule about recon, and
+[the gate reference](docs/reference/the-gate.md) for the mechanism.
 
 **Run** — one `launch.sh` invocation and everything it produced: the task config,
 the traces, the briefs, the results and the diffs. Archived under

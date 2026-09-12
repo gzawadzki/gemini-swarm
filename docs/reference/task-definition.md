@@ -71,7 +71,8 @@ The scripts depend on this schema, so do not invent another one.
 
 - `name` — unique, lowercase, matching `[a-z][a-z0-9_-]{0,31}`, which is herdr's
   agent-name rule.
-- `kind` — `gemini`, `agy` or `codex`.
+- `kind` — `gemini`, `agy` or `codex`. Which binary each one is, and what it is
+  good for, is in [models and routing](models-and-routing.md).
 - `repo` — absolute path to the main repository. `launch.sh` creates a worktree
   from it, so the agent never touches this path directly.
 - `prompt` — the task itself. See [Writing the prompt](#writing-the-prompt).
@@ -107,12 +108,14 @@ it still launch.
 - `base` — an explicit base ref instead of `HEAD`.
 - `model`, `effort` — apply to `agy` and `codex`, not to `gemini`. Most agy slugs
   already encode the effort, so `effort` is usually unnecessary there; for codex
-  it becomes `-c model_reasoning_effort="<effort>"`. Defaults follow
+  it becomes `-c model_reasoning_effort="<effort>"`. Which slug to pick is in
+  [models and routing](models-and-routing.md); the default follows
   [ADR 0003](../adr/0003-flash-high-is-the-default.md).
 - `args` — extra CLI flags. `launch.sh` injects the auto-approve flag and the
   model flags itself, so add only flags beyond those.
-- `verify` — the shell command `verify.sh` runs inside the worktree as the
-  deterministic half of the gate. Omit it and `verify.sh` tries to auto-detect
+- `verify` — the shell command `verify.sh` runs inside the worktree as
+  [the deterministic half of the gate](the-gate.md#stage-1-verify-the-deterministic-half).
+  Omit it and `verify.sh` tries to auto-detect
   one (npm/yarn/pnpm `test`, `pytest`, `cargo test`, `go test`, a `test:` Make
   target); finding nothing it reports `skipped` rather than blocking. Prefer
   setting it: a scoped command is faster and less flaky than a full suite.
@@ -129,8 +132,9 @@ it still launch.
 
 ## Writing the prompt
 
-`critique.sh` grades the diff against this text, so a prompt that says nothing
-measurable gives the reviewer nothing to measure. These rules constrain the
+[`critique.sh`](the-gate.md#stage-2-critique-the-judgement-half) grades the diff
+against this text, so a prompt that says nothing measurable gives the reviewer
+nothing to measure. These rules constrain the
 schema above; they are why the fields are shaped the way they are.
 
 - **Name concrete symbols, not generalities.** "Add a retry with backoff to

@@ -18,26 +18,26 @@ against the pitfalls and the declared scope; 04 — Scope and size are visible b
 the operator reads the diff; 05 — Verify cannot report a pass for code it never ran;
 06 — A run archives its own evidence before anything is removed.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The skill document is thin and operational: the operating model, the numbered
+- [x] The skill document is thin and operational: the operating model, the numbered
       flow, and a pointer from each step to its reference.
-- [ ] References cover task definition (already created in ticket 02 — extend, do not
+- [x] References cover task definition (already created in ticket 02 — extend, do not
       duplicate), models and routing, accounts and quota, the gate, and troubleshooting.
-- [ ] Nothing that only one step needs stays in the thin document.
-- [ ] Every reference is pointed at from the step that needs it, so the thin document
+- [x] Nothing that only one step needs stays in the thin document.
+- [x] Every reference is pointed at from the step that needs it, so the thin document
       stays navigable and no reference is orphaned.
-- [ ] Cleanup appears as an ordinary step in the flow, not an optional follow-up. The
+- [x] Cleanup appears as an ordinary step in the flow, not an optional follow-up. The
       version of this document that shipped for months never mentioned it, and cleanup
       was done by hand as a result.
-- [ ] The troubleshooting reference records the traps found during this effort: the
+- [x] The troubleshooting reference records the traps found during this effort: the
       readiness-timeout ceiling and what herdr answers above it, prompt delivery and
       why the brief is a file, the branch a failed launch used to leave behind, the
       Windows directory lock during worktree removal, and the editable-install trap
       from ticket 05.
-- [ ] Model defaults follow ADR 0003, and the routing guidance matches what the code
+- [x] Model defaults follow ADR 0003, and the routing guidance matches what the code
       actually does.
-- [ ] The frontmatter description still states what the skill does and when to reach
+- [x] The frontmatter description still states what the skill does and when to reach
       for it, since that is all the orchestrator sees before loading anything.
-- [ ] No behaviour changes in this ticket. It is documentation only, and the suite
+- [x] No behaviour changes in this ticket. It is documentation only, and the suite
       passes untouched.

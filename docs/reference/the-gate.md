@@ -1,0 +1,176 @@
+# Reference: the egress gate
+
+Two stages stand between an auto-approving agent's diff and the orchestrator's
+attention: `verify.sh`, which is deterministic, and `critique.sh`, which is a
+cheap model's judgement. Both **filter**. Neither **approves** — a passing gate
+has never meant mergeable, and a real defect has passed both.
+
+The vocabulary here — gate, soundness, stray — is defined in
+[CONTEXT.md](../../CONTEXT.md).
+
+## Stage 1: verify, the deterministic half
+
+```bash
+scripts/verify.sh <task-name>
+```
+
+Runs the task's `verify` command inside its worktree, or an auto-detected
+test/build command when the task set none, and caches the result so `status.sh`
+can show it without re-running anything. `pass` and `skipped` move the task on to
+the critique; `fail` goes back to the agent, and no tokens are spent reading a
+diff that does not build. `skipped` means nothing was proven — treat that diff
+with the extra care of an unverified one.
+
+Auto-detection recognises npm/yarn/pnpm `test`, `pytest`, `cargo test`,
+`go test`, and a `test:` Make target. Finding nothing, it reports `skipped`
+rather than blocking, so an unknown stack never wedges the pipeline.
+
+### A green command is not yet a pass
+
+After the command succeeds, verify asks where the code under test actually
+resolved from. An editable install pins imports to a fixed path, so a suite run
+inside a worktree can import the package from the main checkout and go green on a
+diff it never touched. That happened here, and one project's `pythonpath` line
+saved it by accident. A gate that can test the wrong tree is worse than no gate,
+because it is counted as evidence.
+
+| resolution | status | meaning |
+|------------|--------|---------|
+| inside the worktree | `pass` | the tests ran on this task's code |
+| outside it | `fail` | naming the module and the path. **Do not re-prompt the agent**: the diff may be fine and the environment is what lied |
+| could not be established | `skipped` | the command passed, but which tree ran it is unproven, so it is not a pass |
+| not checked | `pass` | only with `HERDR_SWARM_NO_SOUNDNESS=1`, and the result records `"soundness": "disabled"` |
+
+The mechanism is provisional and deliberately narrow: it resolves the module
+named by `pyproject.toml` and checks the path. Only Python is in evidence, so
+every other project reports `skipped` rather than assuming soundness. Widening it
+means adding a positive check per ecosystem — never treating a language as safe
+because the trap has not been seen there yet. The requirement is the guarantee,
+not the technique. The failure mode this exists for is written up in
+[troubleshooting](troubleshooting.md#tests-that-pass-against-another-checkout).
+
+## Stage 2: critique, the judgement half
+
+```bash
+scripts/critique.sh <task-name>
+```
+
+A passing test suite says nothing about whether the agent did what it was asked.
+That question is what actually costs a full diff read, so a cheap model goes
+first. `critique.sh` runs one-shot print mode on the Antigravity Gemini pool,
+hands the reviewer the task's original prompt plus the diff against its base, and
+asks for a verdict against a fixed rubric: the declared pitfalls, completeness,
+scope (deleted tests, disabled checks, unrelated edits), correctness, safety,
+tests. Style and refactor opinions are explicitly out of scope, because they
+generate noise rather than blockers.
+
+**The declared pitfalls are the first thing it judges.** Each one from the task
+config is numbered in the reviewer's brief as a criterion, and the reply carries a
+`pitfalls_checked` entry per pitfall saying whether the diff respected it,
+violated it, or whether it did not apply. The verdict file resolves those numbers
+back to the pitfall text and records `pitfalls_declared`, so a later reader can
+tell a thorough pass from a shallow one without the task config beside it. This
+is the fix for a real miss: a diff where a translated comment stopped describing
+the code one line below it came back `pass`, `confidence: high`, "completely and
+correctly implemented", because the reviewer had nothing specific to look for.
+
+The declared `files` go in as a scope criterion: the reviewer flags every change
+outside the list and says whether each was necessary. It reports, it does not
+fail — a new test file or a package import is a legitimate stray.
+
+A reply that marks a pitfall `violated` while returning `pass` contradicts itself
+and the brief it was given, so `critique.sh` downgrades it to `revise` and says
+why. The reviewer's own word is kept as `reviewer_verdict`, so the downgrade is
+auditable rather than a quiet rewrite.
+
+| verdict | meaning | what to do |
+|---------|---------|------------|
+| `pass` | no blocker or major issue found | go read the diff |
+| `revise` | real problems the same agent can fix | bounce the issue list back |
+| `reject` | wrong approach, or dangerous | take it to the user; re-prompting will not fix it |
+| `skipped` | no diff, or no reviewer binary available | read the diff yourself |
+| `unparseable` / `error` | the reviewer misbehaved or crashed | read the diff yourself; this is not a verdict |
+
+Exit status is 0 for everything except `revise` and `reject`, which exit 1, so a
+tooling failure never wedges the pipeline — it falls through to your read.
+
+### The reviewer is a different model
+
+A model grading its own output shares its own blind spots. When the task's
+`model` in `state.json` is the critique model, `critique.sh` reviews on
+`HERDR_SWARM_CRITIQUE_ALT_MODEL` instead (default `gemini-3.1-pro-high`, still on
+the Gemini pool). The verdict file records `worker_model` and `independent`. The
+one case this cannot avoid is a codex fallback task critiqued by codex while the
+Gemini pool is empty; the script warns and writes `"independent": false`. Tell
+the user when that happens, and weigh that `pass` as the self-review it is.
+
+### Plugins are off for every codex the swarm starts
+
+Worker or reviewer, every codex runs with `--disable plugins`, so user plugins
+such as caveman cannot inject a SessionStart hook that changes how it writes the
+result file, commit messages or the verdict JSON. Per-plugin
+`-c plugins."x".enabled=false` overrides do not work for this; they were measured
+to leave the prompt unchanged. `~/.codex/AGENTS.md` still loads. Set
+`HERDR_SWARM_CODEX_PLUGINS=1` to keep plugins on.
+
+### Overrides
+
+| variable | default | effect |
+|----------|---------|--------|
+| `HERDR_SWARM_CRITIQUE_MODEL` | `gemini-3.8-flash-high` | the reviewer model |
+| `HERDR_SWARM_CRITIQUE_ALT_MODEL` | `gemini-3.1-pro-high` | used when the default would review its own work |
+| `HERDR_SWARM_CRITIQUE_KIND` | auto | force `agy`, `codex` or `gemini` |
+| `HERDR_SWARM_CRITIQUE_EFFORT` | `medium` | reasoning effort |
+| `HERDR_SWARM_CRITIQUE_TIMEOUT` | `600` | seconds |
+| `HERDR_SWARM_CRITIQUE_DIFF_LINES` | `1500` | past this the diff in the brief is truncated and the reviewer is told to read the repo itself; the verdict records `"diff_truncated": true`, so a confident pass over a diff nobody saw in full is visible afterwards |
+| `HERDR_SWARM_NO_SOUNDNESS` | unset | `1` skips the resolution check in stage 1 |
+
+## Scope and size, reported by both views
+
+`status.sh` and `review.sh` print the same two advisory findings, from one reader
+so the two views cannot disagree:
+
+- **Strays** — files a task's diff touched that no entry in its declared `files`
+  covers. Usually legitimate: a new test file, a package import. Read the line
+  and move on.
+- **Size** — the diff's added-plus-deleted lines when it ran well past the
+  400-line aim. The call-out threshold sits half again above the aim, so an
+  ordinary task that lands a little over stays quiet: a report that fires on
+  well-sized work is a report nobody reads. `HERDR_SWARM_DIFF_LINES` moves the
+  aim and the threshold follows it.
+
+Neither ever blocks. An oversized diff is already written by the time anyone sees
+it, so the call-out is for the next task, not this one.
+
+## After the gate: the optional trim review
+
+```bash
+scripts/trim.sh <task-name>
+```
+
+Run this on demand, when a diff that already passed the critique **and your own
+read** looks bigger than the task needed. A cheap model
+(`HERDR_SWARM_TRIM_MODEL`, default the critique model) reads the diff for
+overengineering only: single-use abstractions, options nobody sets,
+generalisation the task did not ask for, re-implemented helpers, dead code. It
+writes suggested cuts to `.herdr-swarm/<name>.trim.json`, and `review.sh` lists
+them afterwards.
+
+It is advice, not a gate. It always exits 0, never judges correctness or safety,
+never edits the worktree, and is told not to cut input validation, I/O error
+handling or tests. Order matters: correctness first, trimming second, commit
+last. Do not run YAGNI as an always-on filter; applied to every task it pushes
+agents into cutting corners that matter.
+
+## What the gate does not do
+
+- A verify `pass` means the tests ran, not that the change is correct or safe.
+- A critique `pass` means one cheap model, reviewing another model's work, found
+  nothing — weaker evidence than the test run, and produced by exactly the kind
+  of system this gate exists to distrust.
+- A critique `reject` is information, not authority. It can be wrong. Read the
+  diff before throwing work away on its say-so.
+- A trim suggestion is not a finding. Never apply cuts without reading them.
+
+The diff read is still the only thing between an auto-approving agent and the
+user's branch.

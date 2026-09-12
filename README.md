@@ -149,8 +149,32 @@ scripts/cleanup.sh                 # close agents that reported a result
 scripts/cleanup.sh --worktrees     # and remove a worktree once its branch is merged
 ```
 
+Before it closes anything, cleanup archives the run to
+`~/.herdr/runs/<launch-timestamp>/` and prints the path: the task config as
+launched, the state file, the trace, a status snapshot, and per task the diff and
+both gate verdicts. That happens first because everything after it is
+destructive, and a pane that will not close must not cost the record. A run
+cleaned up twice keeps the first archive. `HERDR_SWARM_RUN_DIR` moves the root.
+
 State lives in `.herdr-swarm/state.json`. Override the location with
 `HERDR_SWARM_STATE_DIR`.
+
+## Documentation
+
+`SKILL.md` is what Claude loads: the operating model and the numbered flow, with
+a pointer from each step to the reference it needs. The references are:
+
+| document | what is in it |
+|----------|---------------|
+| [defining a task](docs/reference/task-definition.md) | the slice test, every schema field, and the rules for writing a prompt |
+| [models and routing](docs/reference/models-and-routing.md) | the three agent kinds, the model menu, and which slug a task should get |
+| [accounts and quota](docs/reference/accounts-and-quota.md) | the two pools, the second Antigravity account, and the codex fallback |
+| [the egress gate](docs/reference/the-gate.md) | verify, soundness, critique, scope and size, and the optional trim review |
+| [cleanup and the run archive](docs/reference/cleanup-and-archive.md) | what gets closed, what gets removed, and what the archive keeps |
+| [troubleshooting](docs/reference/troubleshooting.md) | trace mode, and every trap this project has actually hit |
+
+[CONTEXT.md](CONTEXT.md) defines the vocabulary; `docs/adr/` records the
+decisions and why they were made.
 
 ## Trace mode
 
@@ -182,7 +206,8 @@ count only, so the log stays safe to paste.
 This is for the failures that look like success: a prompt herdr accepted but the
 agent never saw (`prompt.stalled`, `prompt.lost`), a quota read that failed open
 (`quota.read`), a base ref that resolved to the branch tip and made the diff look
-empty (`base.resolve`, `diff.collect`). `SKILL.md` section 13 lists the full
+empty (`base.resolve`, `diff.collect`). The
+[troubleshooting reference](docs/reference/troubleshooting.md) lists the full
 event vocabulary per script.
 
 ## Machine critique

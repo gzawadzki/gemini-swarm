@@ -946,9 +946,10 @@ _archive_collect() {  # <dir> <state-file>
 }
 
 # Write the run's archive and print where it went. Built in a staging directory
-# and moved into place, so the final directory existing always means a complete
-# record: a second cleanup, run once the worktrees are gone and the diffs with
-# them, finds it there and leaves it alone rather than overwriting it with less.
+# and moved into place, so the run id never names a directory that collection is
+# still filling, and a second cleanup - run once the worktrees are gone and the
+# diffs with them - finds the first archive there and leaves it alone rather than
+# overwriting it with less.
 #
 # Returns non-zero only when nothing could be written at all. Callers treat that
 # as a warning, because losing the record is not a reason to leave panes open.
