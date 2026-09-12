@@ -1,0 +1,7 @@
+# Working notes that quote a private repository. This repo is public, so the
+# notes stay on disk and out of the history; the ADRs and the spec cite them as a
+# local primary source, not as a file a reader can open here.
+.scratch/swarm-rebuild-findings.md
+
+# Per-run swarm state, written next to whatever repo the swarm was launched from.
+.herdr-swarm/

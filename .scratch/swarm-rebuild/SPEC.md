@@ -4,7 +4,8 @@
 **Tracker:** local, this directory. Tickets land in `.scratch/swarm-rebuild/issues/`.
 **Depends on:** commit `bc6e428` (P0: junction, split timeout fields, brief-as-file,
 branch rollback, honest launch tests).
-**Primary source:** `.scratch/swarm-rebuild-findings.md`
+**Primary source:** local working notes, `.scratch/swarm-rebuild-findings.md`, untracked
+because they quote a private repository and this repo is public
 **ADRs:** [0001](../../docs/adr/0001-junction-not-installer.md),
 [0002](../../docs/adr/0002-required-files-and-pitfalls.md),
 [0003](../../docs/adr/0003-flash-high-is-the-default.md),

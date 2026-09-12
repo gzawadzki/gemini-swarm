@@ -42,4 +42,4 @@ Both are covered by tests that assert on the arguments the fake herdr actually
 received, not on stdout wording — the specific reason the earlier fix could vanish
 unnoticed.
 
-Primary source: `.scratch/swarm-rebuild-findings.md` §2.
+Primary source: local working notes, `.scratch/swarm-rebuild-findings.md` §2. Untracked on purpose: they quote a private repository and this one is public.

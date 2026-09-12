@@ -46,4 +46,4 @@ critique, but does not fail, because legitimate strays exist (a new test file, a
 - **Hard-failing on out-of-scope files.** Punishes the orchestrator's estimate
   after the work is done; the target is ≤1 bounce per run.
 
-Primary source: `.scratch/swarm-rebuild-findings.md` §5, §6.
+Primary source: local working notes, `.scratch/swarm-rebuild-findings.md` §5, §6. Untracked on purpose: they quote a private repository and this one is public.

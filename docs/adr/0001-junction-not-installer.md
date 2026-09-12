@@ -47,4 +47,4 @@ exists to enable. Attribution, not prevention.
 - Unverified: whether Claude Code's skill discovery follows a junction. If it does
   not, the fallback is `install.ps1 -Check`, and the live-edit problem returns.
 
-Primary source: `.scratch/swarm-rebuild-findings.md` §1.
+Primary source: local working notes, `.scratch/swarm-rebuild-findings.md` §1. Untracked on purpose: they quote a private repository and this one is public.

@@ -34,4 +34,4 @@ Evidence is one run. If flash-high starts bouncing on well-specified slices, thi
 is the decision to revisit first — and per ADR 0002 the run archive is what makes
 that judgeable instead of anecdotal.
 
-Primary source: `.scratch/swarm-rebuild-findings.md` §6.
+Primary source: local working notes, `.scratch/swarm-rebuild-findings.md` §6. Untracked on purpose: they quote a private repository and this one is public.
