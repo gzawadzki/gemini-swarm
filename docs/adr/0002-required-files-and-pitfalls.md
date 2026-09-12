@@ -1,7 +1,8 @@
 # ADR 0002: `files` and `pitfalls` are required fields
 
 **Date:** 2026-09-12
-**Status:** accepted, implemented in `launch.sh`
+**Status:** accepted. The schema and the brief are implemented in `launch.sh`;
+the critique criteria are ticket 03 and the scope reporting is ticket 04.
 
 ## Context
 

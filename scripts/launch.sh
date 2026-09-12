@@ -96,6 +96,19 @@ for i in $(seq 0 $((n_tasks - 1))); do
     trace "$name" "recon.reject" "missing: ${missing[*]}"
     continue
   fi
+  # Both lists are rendered into the brief with `jq -r '.[] | "- " + .'`, which
+  # fails on anything that is not a string. That render happens after the agent
+  # is started, and under `set -e` a failure there would kill the run holding a
+  # live agent and an orphan worktree, taking every later task with it. Check the
+  # entries here, where a rejection still costs nothing.
+  malformed=$(jq -r '[to_entries[] | select(.key == "files" or .key == "pitfalls")
+                      | select(any(.value[]; type != "string" or . == ""))
+                      | .key] | join(" and ")' <<<"$task")
+  if [[ -n "$malformed" ]]; then
+    echo "ERROR: task '$name' has entries in $malformed that are not non-empty strings. Each entry is one path, or one trap written out. Skipping." >&2
+    trace "$name" "recon.reject" "malformed entries in $malformed"
+    continue
+  fi
   n_files=$(jq '.files | length' <<<"$task")
   n_pitfalls=$(jq '.pitfalls | length' <<<"$task")
   if (( n_files == 0 )); then

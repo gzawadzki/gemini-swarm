@@ -382,15 +382,17 @@ schema, because the scripts depend on this one:
   verify command that reinstalls the package, aim at 400 diff lines — are in
   [the task-definition reference](docs/reference/task-definition.md#writing-the-prompt).
 - `files` is what this task is expected to touch, and it is **required**. An
-  empty array is rejected. It reaches the agent in the brief and the gate reports
-  changes outside it, but does not fail on them: legitimate strays exist and a
-  false bounce costs more than a line to read.
+  empty array is rejected, and so is one whose entries are not strings. It
+  reaches the agent in the brief as the expected scope. Straying outside it is
+  not an error: legitimate strays exist and a false bounce costs more than a line
+  to read. Reporting those strays at the gate is ticket 04, not yet built.
 - `pitfalls` is what you found by reading that code, and it is **required**. Each
   entry is a trap the agent would otherwise have to discover: a caller you would
   not expect, a fixture that freezes the clock, a name that means two things. The
   brief carries them as constraints, under a generated instruction not to restate
   them in the source. An empty array is accepted with a warning, so "I read it
-  and found none" stays distinguishable from a forgotten field.
+  and found none" stays distinguishable from a forgotten field. Feeding them to
+  `critique.sh` as grading criteria is ticket 03, not yet built.
 - `args` are extra CLI flags. `launch.sh` injects the auto-approve flag and the
   model flags on its own, so only add flags beyond those.
 - `verify` is an optional shell command `verify.sh` runs inside the worktree as

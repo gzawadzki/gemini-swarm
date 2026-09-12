@@ -76,15 +76,23 @@ The scripts depend on this schema, so do not invent another one.
   from it, so the agent never touches this path directly.
 - `prompt` — the task itself. See [Writing the prompt](#writing-the-prompt).
 - `files` — the files this task is expected to touch, as an array of paths
-  relative to the repo. It reaches the agent in the brief, and the gate reports
-  changes outside it. **It is advisory at the gate**: straying is flagged, not
-  failed, because legitimate strays exist (a new test file, a package import) and
-  a false bounce costs more than a line to read. An empty array is rejected: a
-  task that may change nothing is not a task.
+  relative to the repo. It reaches the agent in the brief as the expected scope.
+  **Straying outside it is never an error**, because legitimate strays exist (a
+  new test file, a package import) and a false bounce costs more than a line to
+  read. An empty array is rejected: a task that may change nothing is not a task.
 - `pitfalls` — the traps you found by reading, as an array of strings. They reach
-  the agent as constraints and the reviewer as grading criteria. An empty array
-  is accepted with a warning, so "I read it and found none" stays expressible and
-  stays distinguishable from a forgotten field.
+  the agent as constraints in its brief. An empty array is accepted with a
+  warning, so "I read it and found none" stays expressible and stays
+  distinguishable from a forgotten field.
+
+Every entry in either array is one non-empty string — one path, or one trap
+written out. A task whose entries are anything else is skipped, with the
+offending field named.
+
+Two consumers are specified but not yet built: reporting the files a diff touched
+outside `files` (ticket 04), and grading the diff against each pitfall
+(ticket 03). Until those land, both fields act on the agent through the brief
+only.
 
 `launch.sh` validates `files` and `pitfalls` before it creates a worktree, and
 skips a task that fails with an error naming the missing field. The tasks after

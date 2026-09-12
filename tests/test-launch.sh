@@ -34,6 +34,11 @@ JSON
   ( cd "$dir" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
 }
 
+run_config() { # reads a tasks.json body on stdin, runs launch.sh against it
+  cat > "$LAST_RUN_DIR/tasks.json"
+  ( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+}
+
 echo "== 1. live account has quota: launches on a =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_launch)
@@ -134,12 +139,12 @@ check  "live account untouched" "a" "$(cat "$LOCALAPPDATA/herdr-swarm/live-accou
 echo
 echo "== 5d. a work-budget-sized ready timeout is clamped, not sent =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+out=$(run_config <<JSON
 {"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":["file.txt"],"pitfalls":[],"timeout_ms":1800000}]}
 JSON
-out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+)
 # 1800000 in this field is what herdr answers invalid_agent_timeout to, and it is
 # what every example in tasks.example.json used to carry.
 grepok "warns about the old field name"   "old name for 'ready_timeout_ms'" "$out"
@@ -163,7 +168,7 @@ check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
 echo
 echo "== 5f. a task with no pitfalls is skipped, and the next task still launches =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+out=$(run_config <<JSON
 {"tasks":[
  {"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],"files":["file.txt"]},
@@ -171,8 +176,12 @@ cat > "$LAST_RUN_DIR/tasks.json" <<JSON
   "branch":"agent/t2","prompt":"do the other thing","args":[],
   "files":["file.txt"],"pitfalls":["the loader caches file.txt for the process lifetime"]}]}
 JSON
-out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
-grepok "names the missing field"          "pitfalls"                        "$out"
+)
+# Matched against "missing pitfalls (", not a bare "pitfalls": the rest of the
+# message mentions both field names whichever one is absent, so a loose pattern
+# passes even when the code names the wrong field.
+grepok "names the missing field"          "missing pitfalls ("              "$out"
+nogrep "does not blame the field that is there" "missing files ("           "$out"
 grepok "says to read the code first"      "[Rr]ead the code"                "$out"
 check  "no worktree for the bad task" "" "$(grep -o '\-\-label t1' "$HERDR_CALL_LOG" || true)"
 check  "no agent for the bad task" "" "$(grep -o 'agent start t1' "$HERDR_CALL_LOG" || true)"
@@ -184,24 +193,60 @@ check  "state.json holds only the good task" "t2" "$(jq -r '.[].name' "$LAST_STA
 echo
 echo "== 5g. a task with no files is skipped =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+out=$(run_config <<JSON
 {"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],"pitfalls":["a trap"]}]}
 JSON
-out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
-grepok "names the missing field"          "files"                           "$out"
+)
+grepok "names the missing field"          "missing files ("                 "$out"
 check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
 check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
 
 echo
+echo "== 5g2. an empty files array is skipped =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+out=$(run_config <<JSON
+{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":[],"pitfalls":["a trap"]}]}
+JSON
+)
+grepok "says the list is empty"           "empty 'files' array"             "$out"
+check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
+check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 5g3. a non-string entry is rejected before a worktree exists =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+out=$(run_config <<JSON
+{"tasks":[
+ {"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":["file.txt"],"pitfalls":[3]},
+ {"name":"t2","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t2","prompt":"do the other thing","args":[],
+  "files":["file.txt"],"pitfalls":["the loader caches file.txt"]}]}
+JSON
+)
+# Rendering the brief runs `jq -r '.pitfalls[] | "- " + .'`, which fails on a
+# non-string entry. That happens after `agent start`, and under `set -e` it
+# would kill the run holding a live agent and an orphan worktree, taking every
+# later task with it. So the entries are type-checked before any of that.
+grepok "says which field is malformed"    "entries in pitfalls"             "$out"
+nogrep "does not blame the sound field"   "entries in files"                "$out"
+check  "no worktree for the bad task" "" "$(grep -o '\-\-label t1' "$HERDR_CALL_LOG" || true)"
+grepok "the next task still launched"     "agent start t2"                  "$(cat "$HERDR_CALL_LOG")"
+check  "state.json holds only the good task" "t2" "$(jq -r '.[].name' "$LAST_STATE_DIR/state.json")"
+
+echo
 echo "== 5h. an empty pitfalls list warns but launches =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+out=$(run_config <<JSON
 {"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":["file.txt"],"pitfalls":[]}]}
 JSON
-out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+)
 # "I read it and found nothing" stays expressible, and stays distinguishable
 # from a forgotten field.
 grepok "warns about the empty list"       "no pitfalls"                     "$out"
