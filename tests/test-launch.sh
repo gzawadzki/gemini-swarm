@@ -85,6 +85,7 @@ check  "run.json names the run" "true" "$(jq -r '.run_id | test("^[0-9]{8}T[0-9]
 check  "run.json embeds the config" "do the thing" "$(jq -r '.config.tasks[0].prompt' "$LAST_STATE_DIR/run.json")"
 check  "run.json records the skill commit" "true" "$(jq -r '.skill_commit | test("^[0-9a-f]+$")' "$LAST_STATE_DIR/run.json")"
 check  "run.json records whether the tree was dirty" "number" "$(jq -r '.skill_dirty | type' "$LAST_STATE_DIR/run.json")"
+check  "run.json records the dirty file list" "array" "$(jq -r '.skill_dirty_files | type' "$LAST_STATE_DIR/run.json")"
 grepok "says where the run will be archived" "Run id: [0-9]\{8\}T" "$out"
 grepok "agent started through herdr"      "agent start t1"                  "$(cat "$HERDR_CALL_LOG")"
 

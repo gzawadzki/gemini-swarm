@@ -38,9 +38,11 @@ entries_file="$STATE_DIR/.entries.jsonl"
 skill_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 skill_head="unknown"
 skill_dirty=0
+skill_dirty_files="[]"
 if git -C "$skill_root" rev-parse --git-dir >/dev/null 2>&1; then
   skill_head=$(git -C "$skill_root" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  skill_dirty=$(git -C "$skill_root" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  skill_dirty_files=$(git -C "$skill_root" status --porcelain 2>/dev/null | jq -R -s -c '[splits("\r?\n") | select(length > 0)]' || echo "[]")
+  skill_dirty=$(jq 'length' <<<"$skill_dirty_files")
   if (( skill_dirty > 0 )); then
     echo "swarm skill: $skill_head plus $skill_dirty uncommitted file(s) - this run is NOT a committed state"
     git -C "$skill_root" status --porcelain 2>/dev/null | sed 's/^/             /'
@@ -58,10 +60,12 @@ fi
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
 jq -n --arg run_id "$run_id" --arg tasks_file "$TASKS_FILE" \
       --arg skill_commit "$skill_head" --argjson skill_dirty "${skill_dirty:-0}" \
+      --argjson skill_dirty_files "${skill_dirty_files:-[]}" \
       --arg skill_root "$skill_root" --argjson started_at "$(date +%s)" \
       --argjson config "$(cat "$TASKS_FILE")" \
   '{run_id: $run_id, started_at: $started_at, tasks_file: $tasks_file,
-    skill_commit: $skill_commit, skill_dirty: $skill_dirty, skill_root: $skill_root,
+    skill_commit: $skill_commit, skill_dirty: $skill_dirty,
+    skill_dirty_files: $skill_dirty_files, skill_root: $skill_root,
     config: $config}' > "$(run_meta_file)"
 trace "-" "run.meta" "$run_id skill=$skill_head dirty=${skill_dirty:-0}"
 

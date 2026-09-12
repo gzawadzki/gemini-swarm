@@ -18,7 +18,7 @@ Before it closes anything, `cleanup.sh` writes the run's archive to
 | file | what it is |
 |------|------------|
 | `tasks.json` | the task config **as launched**, embedded by `launch.sh` rather than read back from disk, since the file the orchestrator wrote is routinely edited or deleted between runs |
-| `run.json` | the run id, the skill commit it ran on, and how many files were uncommitted in that tree at launch |
+| `run.json` | the run id, the skill commit it ran on, how many files were uncommitted in that tree at launch, and the dirty-file list |
 | `state.json` | the per-task state file |
 | `trace.log` | the trace, when the run was traced, so the order in which things failed is recoverable |
 | `status.txt` | a status snapshot taken while the worktrees still existed |

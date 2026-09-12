@@ -41,7 +41,9 @@ reset_world() {
   RUN_SEQ=$((RUN_SEQ + 1))
   jq -n --arg id "run-$RUN_SEQ" --arg repo "$SRC" \
     '{run_id: $id, started_at: 1757000000, tasks_file: "tasks.json",
-      skill_commit: "abc1234", skill_dirty: 2, skill_root: "/skill",
+      skill_commit: "abc1234", skill_dirty: 2,
+      skill_dirty_files: [" M file1.txt", "?? file2.txt"],
+      skill_root: "/skill",
       config: {tasks: [{name: "finished", kind: "agy", repo: $repo,
                         prompt: "do the thing", files: ["file.txt"], pitfalls: []}]}}' \
     > "$RUN/.herdr-swarm/run.json"
@@ -160,6 +162,7 @@ check  "keeps the state file" "3" "$(jq 'length' "$ARCH/state.json")"
 # An odd run has to be attributable to the version of the skill that produced it.
 check  "records the skill commit" "abc1234" "$(jq -r '.skill_commit' "$ARCH/run.json")"
 check  "records that the tree was dirty" "2" "$(jq -r '.skill_dirty' "$ARCH/run.json")"
+check  "records the dirty file paths" " M file1.txt,?? file2.txt" "$(jq -r '.skill_dirty_files | join(",")' "$ARCH/run.json")"
 grepok "keeps the trace" "run.start" "$(cat "$ARCH/trace.log")"
 grepok "keeps a status snapshot" "^TASK" "$(cat "$ARCH/status.txt")"
 check  "keeps the verify verdict" "pass" "$(jq -r '.status' "$ARCH/finished.verify.json")"
