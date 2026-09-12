@@ -3,47 +3,10 @@
 # with real worktrees. Nothing touches the real herdr or the user's repos.
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-T="$(mktemp -d)"
-BIN="$T/bin"; mkdir -p "$BIN"
-export FAKE_AGENTS="$T/agents"; mkdir -p "$FAKE_AGENTS"
-export HERDR_CALL_LOG="$T/herdr-calls.log"
-
-pass=0; fail=0
-check() { if [[ "$2" == "$3" ]]; then printf 'ok    %-46s %s\n' "$1" "$3"; pass=$((pass+1));
-          else printf 'FAIL  %-46s expected [%s] got [%s]\n' "$1" "$2" "$3"; fail=$((fail+1)); fi; }
-grepok() { if grep -q "$2" <<<"$3"; then printf 'ok    %s\n' "$1"; pass=$((pass+1));
-           else printf 'FAIL  %s (no match for /%s/)\n' "$1" "$2"; fail=$((fail+1)); fi; }
-nogrep() { if grep -q "$2" <<<"$3"; then printf 'FAIL  %s (unexpected /%s/)\n' "$1" "$2"; fail=$((fail+1));
-           else printf 'ok    %s\n' "$1"; pass=$((pass+1)); fi; }
-
-# --- fake herdr -------------------------------------------------------------
-# An agent's state is a file; send-keys "removes" it, which is what herdr
-# reports once the TUI has exited. The key spelling is checked on purpose: the
-# real herdr rejects "ctrl-c", and a single ctrl+c usually does not exit agy.
-cat > "$BIN/herdr" <<'EOF'
-#!/usr/bin/env bash
-echo "herdr $*" >> "$HERDR_CALL_LOG"
-case "$1 ${2:-}" in
-  "agent get")
-    name="$3"
-    if [[ -f "$FAKE_AGENTS/$name.gone" ]]; then echo '{"result":{}}'; exit 0; fi
-    printf '{"result":{"agent":{"agent_status":"%s"}}}' "$(cat "$FAKE_AGENTS/$name.state" 2>/dev/null || echo done)" ;;
-  "agent send-keys")
-    name="$3"; shift 3
-    if [[ "${1:-}" == "ctrl+c" && "${2:-}" == "ctrl+c" ]]; then
-      touch "$FAKE_AGENTS/$name.gone"; echo '{"result":{}}'
-    else
-      echo '{"error":{"code":"invalid_key","message":"unsupported key ${1:-}"}}'; exit 1
-    fi ;;
-  "worktree remove")
-    if [[ "${FAKE_REMOVE_FAILS:-0}" == "1" ]]; then echo '{"error":{}}'; exit 1; fi
-    echo '{"result":{"ok":true}}' ;;
-  *) echo '{"result":{}}' ;;
-esac
-EOF
-chmod +x "$BIN"/*
-export PATH="$BIN:$PATH"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
+harness_fake herdr
+# An agent this suite has not seeded is one that already finished.
+export FAKE_AGENT_STATUS=done
 
 # --- throwaway repo with two worktrees --------------------------------------
 SRC="$T/repo"; mkdir -p "$SRC"
