@@ -86,6 +86,28 @@ trace_banner() {
   echo "trace: $(trace_file)" >&2
 }
 
+# Two different clocks, kept apart on purpose. `ready_timeout_ms` is how long
+# herdr waits for the agent's TUI to accept input; herdr rejects anything above
+# 300000 with invalid_agent_timeout, which is what a work-budget-sized value in
+# this field used to cause. `work_budget_ms` is how long the task is expected to
+# take, which nothing enforces: status.sh reads it to mark a task OVERDUE, so a
+# hung agent stops looking identical to a thinking one.
+MAX_READY_TIMEOUT_MS=300000
+DEFAULT_READY_TIMEOUT_MS=60000
+DEFAULT_WORK_BUDGET_MS=900000
+
+# Briefs live outside every repo and worktree, so writing one cannot dirty a
+# tree that status.sh checks, and the path stays valid from any worktree.
+BRIEF_DIR="${HERDR_SWARM_BRIEF_DIR:-$HOME/.herdr/briefs}"
+
+# The agents are native Windows binaries under Git Bash, and they read an MSYS
+# path like /c/Users/... as C:\Users\... relative to their own root, so a file
+# handed over that way is invisible to them. Give them the form their OS agrees
+# with; Git Bash reads C:/... back fine, so one form serves both.
+to_native() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # Lifecycle state of an agent: idle | working | blocked | done | unreachable.
 agent_state() {
   herdr agent get "$1" 2>/dev/null \
@@ -484,7 +506,7 @@ task_state() {
 
 # Model and effort the fallback runs on.
 CODEX_FALLBACK_MODEL="${HERDR_SWARM_CODEX_MODEL:-gpt-5.6-luna}"
-CODEX_FALLBACK_EFFORT="${HERDR_SWARM_CODEX_EFFORT:-xhigh}"
+CODEX_FALLBACK_EFFORT="${HERDR_SWARM_CODEX_EFFORT:-max}"
 
 # Extra arguments for every codex the swarm starts. User plugins such as caveman
 # inject SessionStart hooks that change how the model writes, which is fine in a

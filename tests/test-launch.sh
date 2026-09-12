@@ -26,9 +26,14 @@ echo "herdr $*" >> "$HERDR_CALL_LOG"
 case "$1 ${2:-}" in
   "worktree create")
     printf '{"result":{"root_pane":{"pane_id":"pane-1"},"workspace":{"workspace_id":"ws-1","worktree":{"checkout_path":"%s"}}}}' "$FAKE_WORKTREE" ;;
-  "agent start")  echo '{"result":{"type":"agent_started"}}' ;;
+  "agent start")
+    if [[ "${FAKE_START_RC:-0}" != "0" ]]; then echo '{"error":{"code":"invalid_agent_timeout"}}'; exit "$FAKE_START_RC"; fi
+    echo '{"result":{"type":"agent_started"}}' ;;
   "agent get")    echo '{"result":{"agent":{"agent_status":"working","interactive_ready":true,"state_change_seq":7}}}' ;;
-  "agent prompt") echo '{"result":{"type":"agent_prompted"}}' ;;
+  # herdr agent prompt <name> <text>, so the text is $4 after the two subcommand
+  # words. Recorded verbatim: the point of this fake is to assert on what the real
+  # herdr would have received, not on what launch.sh printed to stdout.
+  "agent prompt") printf '%s' "$4" > "$HERDR_PROMPT_FILE"; echo '{"result":{"type":"agent_prompted"}}' ;;
   "worktree remove") echo '{"result":{"ok":true}}' ;;
   *) echo '{"result":{}}' ;;
 esac
@@ -82,6 +87,9 @@ EOF
 chmod +x "$BIN"/*
 export PATH="$BIN:$PATH"
 export HERDR_CALL_LOG="$T/herdr-calls.log"
+export HERDR_PROMPT_FILE="$T/last-prompt.txt"
+# Briefs must not land in the real ~/.herdr/briefs while testing.
+export HERDR_SWARM_BRIEF_DIR="$T/briefs"
 export HERDR_ENV=1
 
 # --- throwaway repo ---------------------------------------------------------
@@ -99,7 +107,8 @@ run_launch() { # runs launch.sh in the dir prepared by new_run_dir
   local dir="$LAST_RUN_DIR"
   cat > "$dir/tasks.json" <<JSON
 {"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.1-pro-high","repo":"$SRC",
-  "branch":"agent/t1","prompt":"do the thing","args":[],"timeout_ms":1000}]}
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
   ( cd "$dir" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
 }
@@ -107,6 +116,9 @@ JSON
 echo "== 1. live account has quota: launches on a =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_launch)
+# The installed skill is a junction to the working repo, so a run has to say which
+# tree state produced it. Reported, never blocked.
+grepok "reports the skill's commit"        "swarm skill: [0-9a-f]"           "$out"
 grepok "starts the agent"                 "starting agy agent on account a" "$out"
 grepok "sends the prompt"                 "sending prompt"                  "$out"
 check  "state.json records account a" "a" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
@@ -117,6 +129,20 @@ check  "state.json records the branch" "agent/t1" "$(jq -r '.[0].branch' "$LAST_
 check  "state.json records the repo" "$(cygpath -m "$SRC" 2>/dev/null || echo "$SRC")" "$(jq -r '.[0].repo' "$LAST_STATE_DIR/state.json")"
 check  "no dead state_file field" "null" "$(jq -r '.[0].state_file' "$LAST_STATE_DIR/state.json")"
 grepok "worktree was created"             "worktree create"                 "$(cat "$HERDR_CALL_LOG")"
+# The prompt that reaches herdr must be a short pointer at the brief file. A long
+# multi-line brief sent inline comes back agent_prompted and arrives empty, and
+# the old test could not tell the difference: it only checked stdout for the words
+# "sending prompt", which are printed either way.
+grepok "prompt is a pointer at the brief"  "Read the file .*briefs/t1.md"    "$(cat "$HERDR_PROMPT_FILE")"
+check  "prompt is a single line" "0" "$(wc -l < "$HERDR_PROMPT_FILE" | tr -d ' ')"
+check  "prompt does not carry the brief" "0" "$(grep -c 'Result file' "$HERDR_PROMPT_FILE")"
+grepok "brief file holds the task text"    "do the thing"                    "$(cat "$T/briefs/t1.md")"
+grepok "brief file holds the result contract" "Result file (required, last action)" "$(cat "$T/briefs/t1.md")"
+grepok "brief names the result path"       "t1.result.json"                  "$(cat "$T/briefs/t1.md")"
+grepok "herdr got the ready timeout"       "\-\-timeout 1000"               "$(cat "$HERDR_CALL_LOG")"
+check  "state records the work budget" "900000" "$(jq -r '.[0].work_budget_ms' "$LAST_STATE_DIR/state.json")"
+check  "state records the brief file" "true" "$(jq -r '.[0].brief_file | endswith("t1.md")' "$LAST_STATE_DIR/state.json")"
+check  "state records a launch time" "true" "$(jq -r '.[0].started_at > 0' "$LAST_STATE_DIR/state.json")"
 grepok "agent started through herdr"      "agent start t1"                  "$(cat "$HERDR_CALL_LOG")"
 
 echo
@@ -174,6 +200,34 @@ printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(HERDR_SWARM_NO_SWITCHING=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=full run_launch)
 grepok "announces the fallback"           "Running on codex"                    "$out"
 check  "live account untouched" "a" "$(cat "$LOCALAPPDATA/herdr-swarm/live-account")"
+
+echo
+echo "== 5d. a work-budget-sized ready timeout is clamped, not sent =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],"timeout_ms":1800000}]}
+JSON
+out=$( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
+# 1800000 in this field is what herdr answers invalid_agent_timeout to, and it is
+# what every example in tasks.example.json used to carry.
+grepok "warns about the old field name"   "old name for 'ready_timeout_ms'" "$out"
+grepok "says it clamped"                  "clamping"                        "$out"
+grepok "herdr got the ceiling, not 1800000" "\-\-timeout 300000"           "$(cat "$HERDR_CALL_LOG")"
+check  "nothing oversized reached herdr" "" "$(grep -o '\-\-timeout 1800000' "$HERDR_CALL_LOG" || true)"
+check  "the budget falls back to the default" "900000" "$(jq -r '.[0].work_budget_ms' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 5e. a failed agent start leaves no branch behind =="
+printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
+git -C "$SRC" branch -f agent/t1 main
+out=$(FAKE_START_RC=1 run_launch)
+grepok "reports the failure"              "agy did not start"               "$out"
+grepok "removed the worktree"             "worktree remove"                 "$(cat "$HERDR_CALL_LOG")"
+# The branch, not the worktree, is what blocks the retry: `worktree create`
+# refuses a branch that already exists.
+check  "branch was deleted" "" "$(git -C "$SRC" rev-parse --verify --quiet refs/heads/agent/t1 || true)"
+check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
 
 echo
 echo "== 6. refuses to run outside a herdr pane =="

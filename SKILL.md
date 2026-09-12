@@ -102,7 +102,15 @@ So the default routing when generating `tasks.json` is:
 
 1. Mechanical, low-risk, well-defined goes to `gemini-3.8-flash-medium`.
 2. **Everything else** — ordinary features, bugfixes, refactors, and reviews —
-   goes to `gemini-3.1-pro-high`. This is the default for almost every task.
+   goes to `gemini-3.8-flash-high`. This is the default for almost every task.
+   Measured: a four-part ticket (per-country seed offsets, CLI help derived from
+   a profile cycle, comment translation, golden tests off limits) finished on
+   flash-high in 9.5 minutes with zero bounces, because the task named the traps
+   up front. A well-specified slice does not need Pro, and a vague one is not
+   rescued by it.
+3. Step up to `gemini-3.1-pro-high` when a task genuinely needs the bigger
+   context, or when flash-high already produced a bad diff for it once. Both are
+   on the Gemini pool, so this costs nothing scarce.
 3. Reach for a `claude-*` or `gpt-*` slug **only when the user names it**, or when
    a task genuinely failed on Gemini Pro twice and needs a different model. When
    you do, say so, because it spends the scarce pool.
@@ -327,13 +335,13 @@ schema, because the scripts depend on this one:
     {
       "name": "fix-auth-bug",
       "kind": "agy",
-      "model": "gemini-3.1-pro-high",
+      "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/fix-auth-bug",
       "prompt": "Fix the failing test in tests/test_auth.py, then run pytest tests/test_auth.py and report the result.",
       "args": [],
       "verify": "pytest -q tests/test_auth.py",
-      "timeout_ms": 900000
+      "work_budget_ms": 900000
     }
   ]
 }
@@ -365,8 +373,20 @@ schema, because the scripts depend on this one:
   `test`, `pytest`, `cargo test`, `go test`, a `test:` Make target); if it finds
   nothing the gate reports `skipped` rather than blocking. Prefer setting it
   explicitly, since a scoped command is faster and less flaky than a full suite.
-- `timeout_ms` is how long `launch.sh` waits for the agent process to become
-  ready. The default of 30000 is usually enough.
+- `ready_timeout_ms` is how long herdr waits for the agent's TUI to accept
+  input. **herdr rejects anything above 300000** with `invalid_agent_timeout`,
+  which fails the launch outright, so `launch.sh` clamps it and warns. The
+  default of 60000 is usually enough. The old name `timeout_ms` still parses,
+  with a warning.
+- `work_budget_ms` is how long you expect the task to take, default 900000
+  (15 minutes). **Nothing enforces it.** `status.sh` reads it to print `OVERDUE`
+  once a task passes it without writing a result file, which is the only signal
+  that tells a hung agent apart from a thinking one. A task needing a budget far
+  past 15 minutes is a task to split, not a number to raise.
+
+  These two were one field named `timeout_ms`, and the examples here set it to
+  work-budget values that herdr rejected outright. A `timeout_ms` above 300000
+  anywhere is that bug.
 
 **Do not screen-scrape for success or failure.** herdr's `idle`, `done` and
 `blocked` states tell you the agent stopped talking, not that the code or the
@@ -377,8 +397,12 @@ result file:
 > `{"status": "success"|"failure", "summary": "...", "tests_passed": true|false}`
 > as your very last action, then make sure `git status` is clean.
 
-`launch.sh` appends this for you. Write only the task-specific instructions in
-`prompt`.
+`launch.sh` writes all of that into a brief file under `~/.herdr/briefs/<name>.md`
+and sends the agent a one-line pointer at it. That indirection is load-bearing:
+`herdr agent prompt` only reliably delivers a short single line, and a long
+multi-line brief pasted into the input box comes back `agent_prompted` while the
+pane sits empty — indistinguishable from a launched task nobody has reviewed.
+Write only the task-specific instructions in `prompt`.
 
 ## 6. Launch
 
@@ -396,9 +420,10 @@ For each task this:
 3. Runs `herdr agent start <name> --kind <kind> --pane <pane_id> -- <auto-approve-flag> [model flags] <args...>`.
    Both accounts start identically: the account was already decided in step 1, by
    swapping the credential `agy` reads at start-up.
-4. Waits for `interactive_ready`, then runs `herdr agent prompt <name> "<prompt
-   plus status-file and commit-discipline instructions>"` **without** `--wait`, so
-   tasks run in parallel, and confirms the agent reacted.
+4. Writes the brief to `~/.herdr/briefs/<name>.md`, waits for `interactive_ready`,
+   then runs `herdr agent prompt <name> "Read the file <brief> and carry out the
+   task it describes in this worktree."` **without** `--wait`, so tasks run in
+   parallel, and confirms the agent reacted.
 
    Both halves of step 4 matter. `agent start` returns when the process exists,
    which is earlier than the TUI accepting input, and a prompt sent in that window

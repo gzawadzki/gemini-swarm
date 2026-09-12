@@ -44,6 +44,20 @@ for i in $(seq 0 $((n - 1))); do
 
   herdr_state=$(task_state "$name")
 
+  # How long the task has been running against the budget it declared. Nothing
+  # enforces the budget: an agent stuck in a loop and an agent thinking hard look
+  # identical from the outside, and this is the one line that tells them apart.
+  started_at=$(jq -r '.started_at // empty' <<<"$entry")
+  budget_ms=$(jq -r '.work_budget_ms // empty' <<<"$entry")
+  overdue=""
+  elapsed_note=""
+  if [[ -n "$started_at" && -n "$budget_ms" ]]; then
+    elapsed_s=$(( $(date +%s) - started_at ))
+    budget_s=$(( budget_ms / 1000 ))
+    elapsed_note="$(( elapsed_s / 60 ))m / $(( budget_s / 60 ))m budget"
+    (( elapsed_s > budget_s )) && overdue=1
+  fi
+
   if [[ -f "$status_file" ]]; then
     result=$(jq -r '.status // "unknown"' "$status_file" 2>/dev/null || echo "unparseable")
     tests=$(jq -r '.tests_passed // "n/a"' "$status_file" 2>/dev/null || echo "n/a")
@@ -52,6 +66,12 @@ for i in $(seq 0 $((n - 1))); do
     result="pending"
     tests="n/a"
     summary="(no result file yet)"
+    if [[ -n "$overdue" ]]; then
+      result="OVERDUE"
+      summary="over budget: $elapsed_note"
+    elif [[ -n "$elapsed_note" ]]; then
+      summary="running: $elapsed_note"
+    fi
   fi
 
   if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
@@ -97,8 +117,10 @@ for i in $(seq 0 $((n - 1))); do
     next_lines+=("$name: herdr can't see this agent -> herdr agent list (do not relaunch blindly)")
   elif [[ "$result" == "failure" ]]; then
     next_lines+=("$name: agent reported failure -> scripts/logs.sh $name")
+  elif [[ -n "$overdue" && "$result" == "OVERDUE" ]]; then
+    next_lines+=("$name: over its budget ($elapsed_note) -> scripts/logs.sh $name, do not just keep waiting")
   elif [[ "$herdr_state" != "idle" && "$herdr_state" != "done" ]]; then
-    next_lines+=("$name: still running -> scripts/logs.sh $name")
+    next_lines+=("$name: still running${elapsed_note:+ ($elapsed_note)} -> scripts/logs.sh $name")
   elif [[ "$result" != "success" || "$clean" != "yes" ]]; then
     next_lines+=("$name: not review-ready (result=$result clean=$clean) -> scripts/logs.sh $name")
   elif [[ "$verify" == "-" ]]; then
@@ -123,5 +145,6 @@ for line in "${next_lines[@]}"; do echo "  $line"; done
 echo
 echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes + VERIFY pass/skipped"
 echo "               + CRITIQUE run. Both gates filter; neither one approves."
+echo "RESULT OVERDUE means the task passed its work_budget_ms and has not written a result file."
 echo "AGENT ending in @B ran on the second Antigravity account, because account A was at 0% when it was launched."
 echo "AGENT ending in * ran on codex because both Antigravity accounts were at 0% for its pool at launch."
