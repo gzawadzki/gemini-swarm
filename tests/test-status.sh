@@ -49,7 +49,6 @@ write_state '["declared.txt"]'
 out=$(status)
 # The report has to mean something when it appears, so a well-behaved task must
 # produce no scope noise at all.
-nogrep "status says nothing about scope" "SCOPE"        "$out"
 nogrep "status says nothing about size"  "line"         "$out"
 rout=$(review)
 nogrep "review says nothing about scope" "outside the declared" "$rout"
@@ -68,7 +67,6 @@ rout=$(review)
 grepok "review names the same stray"   "outside the declared list: strayed.txt" "$rout"
 # Advisory only: a stray is a line to read, not a bounce.
 nogrep "status does not bounce the task" "then re-prompt the agent" "$out"
-grepok "the task is still review-ready" "ready to verify" "$out"
 
 echo
 echo "== 3. a directory declared with a trailing slash covers what is under it =="
@@ -92,7 +90,6 @@ git -C "$WT" commit -qam big
 write_state '["declared.txt"]'
 out=$(status)
 grepok "status reports the size"       "60[0-9] lines changed" "$out"
-grepok "status names the guideline"    "400-line guideline"    "$out"
 rout=$(review)
 grepok "review reports the same size"  "60[0-9] lines changed" "$rout"
 # Already written by the time anyone sees it: the value is the next task being

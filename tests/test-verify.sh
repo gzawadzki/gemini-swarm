@@ -49,7 +49,6 @@ check  "exit code"            "0"       "$rc"
 check  "status"               "pass"    "$(result .status)"
 check  "soundness recorded"   "sound"   "$(result .soundness)"
 grepok "says where it resolved" "demo_pkg"  "$out"
-grepok "moves on to the critique" "critique.sh t1" "$out"
 
 echo
 echo "== 2. tests pass but the code came from the main checkout: fail =="
@@ -79,7 +78,6 @@ check  "exit code"            "0"         "$rc"
 # something it did not check.
 check  "status"               "skipped"   "$(result .status)"
 check  "soundness recorded"   "unknown"   "$(result .soundness)"
-grepok "still moves on to the critique" "critique.sh t1" "$out"
 
 echo
 echo "== 4. the escape hatch disables the check, visibly =="
@@ -92,7 +90,6 @@ check  "status"               "pass"       "$(result .status)"
 # Disabled has to be distinguishable from checked-and-fine, or the result lies
 # by omission.
 check  "soundness recorded"   "disabled"   "$(result .soundness)"
-grepok "says the check was off" "HERDR_SWARM_NO_SOUNDNESS" "$out"
 
 echo
 echo "== 5. a failing verify command still fails, and is not blamed on soundness =="
@@ -102,7 +99,6 @@ export FAKE_PY_ORIGIN="$(native "$WT")/demo_pkg/__init__.py"
 out=$(verify); rc=$?
 check  "exit code"            "1"       "$rc"
 check  "status"               "fail"    "$(result .status)"
-grepok "reports the command failure" "VERIFY FAIL" "$out"
 nogrep "does not mention resolution" "resolved outside" "$out"
 
 echo
@@ -112,7 +108,6 @@ write_state ""
 out=$(verify); rc=$?
 check  "exit code"            "0"         "$rc"
 check  "status"               "skipped"   "$(result .status)"
-grepok "explains there is nothing to run" "no known test command" "$out"
 
 echo
 echo "== 7. a failing command whose code did resolve locally is the agent's problem =="

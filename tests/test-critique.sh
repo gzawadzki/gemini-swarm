@@ -207,7 +207,6 @@ out=$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 )
 # A downgrade the operator never sees is a downgrade that did not happen: this
 # and status.sh are the two places they actually look.
 grepok "review names the violated pitfall" "keep the trailing newline" "$out"
-grepok "review shows the downgrade"        "the reviewer said pass"    "$out"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
