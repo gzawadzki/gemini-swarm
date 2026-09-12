@@ -20,6 +20,9 @@ printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
 # NEXT block: one prescriptive command per task, so a status read collapses into
 # the next action instead of another round of Claude figuring out what to do.
 next_lines=()
+# Scope findings, collected per task and printed once, so the table keeps its
+# shape and the filenames stay readable rather than truncated into a column.
+scope_lines_out=()
 
 n=$(jq 'length' "$STATE_FILE")
 for i in $(seq 0 $((n - 1))); do
@@ -107,6 +110,18 @@ for i in $(seq 0 $((n - 1))); do
   printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
     "$name" "$kind" "$herdr_state" "$result" "$tests" "$clean" "$verify" "$critique" "$summary"
 
+  # Scope and size are read from git, not from a gate: no agent is spawned and
+  # nothing is executed, so a status poll stays free.
+  scope_report "$entry" "$worktree_path"
+  scope_block=$(scope_lines "")
+  if [[ -n "$scope_block" ]]; then
+    scope_lines_out+=("$name:")
+    # One array element per physical line, or only the first keeps its indent.
+    while IFS= read -r scope_line; do
+      scope_lines_out+=("  $scope_line")
+    done <<<"$scope_block"
+  fi
+
   # One compact line per task, not one per column read: status.sh is the script
   # that gets polled, and a chatty trace here would bury the launch and gate
   # events that are actually worth reading back.
@@ -144,6 +159,12 @@ for i in $(seq 0 $((n - 1))); do
     next_lines+=("$name: verify $verify / critique $critique -> scripts/review.sh $name (then, if it looks overbuilt, scripts/trim.sh $name)")
   fi
 done
+
+if (( ${#scope_lines_out[@]} > 0 )); then
+  echo
+  echo "SCOPE (advisory, nothing here blocks a task):"
+  for line in "${scope_lines_out[@]}"; do echo "  $line"; done
+fi
 
 echo
 echo "NEXT:"

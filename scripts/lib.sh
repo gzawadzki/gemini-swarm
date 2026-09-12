@@ -570,6 +570,101 @@ detect_verify_cmd() {
 }
 
 # The verify command for a task: its explicit `verify` field, else detection.
+# --- Scope and size ----------------------------------------------------------
+#
+# What a task's diff touched beyond the files it declared, and how big that diff
+# came out. Both are advisory and neither ever blocks: legitimate strays exist (a
+# new test file, a package import) and a false bounce costs more than reading the
+# line, while an oversized diff is already written by the time anyone sees it, so
+# refusing it does not make it smaller. The value is the next task being narrower.
+#
+# One reader, because status.sh and review.sh both report this and two
+# implementations would eventually disagree about the same diff.
+#
+# Sets:
+#   SCOPE_STRAYS    files touched that no declared entry covers, newline separated
+#   SCOPE_LINES     added plus deleted lines across the whole diff
+#   SCOPE_OVERSIZE  yes when SCOPE_LINES is above the guideline, else empty
+#   SCOPE_READABLE  yes when the diff could be read at all; nothing is reported
+#                   when it could not, rather than reporting "no strays"
+#
+# A declared entry ending in "/" covers everything beneath it; anything else has
+# to match the path exactly. Nothing declared means nothing can be outside it,
+# which keeps tasks written before the schema silent instead of listing every
+# file they touched.
+SCOPE_SIZE_LIMIT="${HERDR_SWARM_DIFF_LINES:-400}"
+
+scope_report() {  # <entry> <worktree>
+  local entry="$1" worktree="$2"
+  SCOPE_STRAYS=""
+  SCOPE_LINES=0
+  SCOPE_OVERSIZE=""
+  SCOPE_READABLE=""
+
+  [[ -n "$worktree" && -d "$worktree" ]] || return 0
+  local base_ref
+  base_ref=$(resolve_base_ref "$entry" "$worktree") || return 0
+
+  local rows=() row add del path
+  mapfile -t rows < <(git -C "$worktree" diff --numstat "${base_ref}...HEAD" 2>/dev/null) || return 0
+  SCOPE_READABLE="yes"
+
+  # jq ends every line with CRLF here, and mapfile keeps the CR - the rule at the
+  # top of this file, which costs a silent miscompare rather than an error: every
+  # declared path would look different from the one git reported and each would be
+  # named a stray.
+  local declared=() d covered strays=() i
+  mapfile -t declared < <(jq -r '.files // [] | .[]' <<<"$entry" 2>/dev/null)
+  for i in "${!declared[@]}"; do declared[$i]=${declared[$i]%$'\r'}; done
+
+  for row in ${rows[@]+"${rows[@]}"}; do
+    # git writes numstat as <added>\t<deleted>\t<path>. Split with parameter
+    # expansion rather than a multi-field `read`: the lib rule at the top of this
+    # file applies to any line that might arrive with a trailing CR.
+    row=${row%$'\r'}
+    [[ -n "$row" ]] || continue
+    add=${row%%$'\t'*}; row=${row#*$'\t'}
+    del=${row%%$'\t'*}; path=${row#*$'\t'}
+    # A binary file reports "-" for both counts and contributes no lines.
+    [[ "$add" == "-" ]] && add=0
+    [[ "$del" == "-" ]] && del=0
+    SCOPE_LINES=$(( SCOPE_LINES + add + del ))
+
+    (( ${#declared[@]} > 0 )) || continue
+    covered=""
+    for d in "${declared[@]}"; do
+      [[ -n "$d" ]] || continue
+      if [[ "$d" == */ ]]; then
+        [[ "$path" == "$d"* ]] && { covered=1; break; }
+      else
+        [[ "$path" == "$d" ]] && { covered=1; break; }
+      fi
+    done
+    [[ -n "$covered" ]] || strays+=("$path")
+  done
+
+  (( ${#strays[@]} > 0 )) && SCOPE_STRAYS=$(printf '%s\n' "${strays[@]}")
+  (( SCOPE_LINES > SCOPE_SIZE_LIMIT )) && SCOPE_OVERSIZE="yes"
+  return 0
+}
+
+# The lines both views print, or nothing at all when there is nothing to say.
+# Shared so the two cannot word the same finding differently. $1 is the prefix
+# each view indents with.
+scope_lines() {  # <prefix>
+  local prefix="${1:-}"
+  [[ -n "$SCOPE_READABLE" ]] || return 0
+  if [[ -n "$SCOPE_STRAYS" ]]; then
+    printf '%soutside the declared list: %s\n' "$prefix" "$(tr '\n' ' ' <<<"$SCOPE_STRAYS" | sed 's/ $//')"
+    printf '%s(advisory: a new test file or an import is legitimate, read the line and move on)\n' "$prefix"
+  fi
+  if [[ -n "$SCOPE_OVERSIZE" ]]; then
+    printf '%s%s lines changed, above the %s-line guideline: the task was wider than one slice\n' \
+      "$prefix" "$SCOPE_LINES" "$SCOPE_SIZE_LIMIT"
+  fi
+  return 0
+}
+
 # --- Verify soundness --------------------------------------------------------
 #
 # A green verify means nothing unless the code it exercised came from the task's

@@ -12,19 +12,19 @@ that the task was too wide before writing the next one.
 
 **Blocked by:** 02 — A task cannot launch without recon.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] One shared reader computes which files a task's diff touched outside its
+- [x] One shared reader computes which files a task's diff touched outside its
       declared list, so the two views cannot give different answers.
-- [ ] The status view reports out-of-scope files per task, naming them.
-- [ ] The pre-merge review reports the same thing, so the last thing the operator
+- [x] The status view reports out-of-scope files per task, naming them.
+- [x] The pre-merge review reports the same thing, so the last thing the operator
       sees before merging is what the task touched beyond what it declared.
-- [ ] Neither view fails, blocks or bounces a task over scope.
-- [ ] A diff far above the roughly-400-line guideline is called out after the fact,
+- [x] Neither view fails, blocks or bounces a task over scope.
+- [x] A diff far above the roughly-400-line guideline is called out after the fact,
       as a signal that the task was too wide.
-- [ ] A task whose diff stays inside its declared files and the size guideline shows
+- [x] A task whose diff stays inside its declared files and the size guideline shows
       no noise at all, so the report means something when it does appear.
-- [ ] Reading status stays free: no agent is spawned and no gate is run by either
+- [x] Reading status stays free: no agent is spawned and no gate is run by either
       report.
-- [ ] Tests cover a task that stays in scope, one that strays, and one whose diff is
+- [x] Tests cover a task that stays in scope, one that strays, and one whose diff is
       oversized, asserting on what the views produced.

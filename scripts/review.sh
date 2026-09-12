@@ -73,7 +73,8 @@ if [[ -f "$critique_file" ]]; then
   critique_reviewer_verdict=$(jq -r '.reviewer_verdict // ""' "$critique_file" 2>/dev/null || echo "")
 fi
 
-trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict base=${base_ref:0:12}"
+scope_report "$entry" "$worktree_path"
+trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict base=${base_ref:0:12} strays=$(wc -w <<<"$SCOPE_STRAYS" | tr -d " ") lines=$SCOPE_LINES"
 
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
@@ -120,6 +121,11 @@ trim_file=$(trim_file_for "$NAME")
 if [[ -f "$trim_file" ]]; then
   echo "trim:      $(jq -r '"\(.status // "?") (\(.cuts // [] | length) suggested cuts, advisory)"' "$trim_file" 2>/dev/null || echo "?")"
   jq -r '.cuts // [] | .[] | "           - \(.file // "?"): \(.what // "")"' "$trim_file" 2>/dev/null || true
+fi
+scope_out=$(scope_lines "           ")
+if [[ -n "$scope_out" ]]; then
+  echo "scope:     what this task touched beyond what it declared"
+  echo "$scope_out"
 fi
 echo "branch:    $branch"
 echo "base:      $base (resolved: ${base_ref:0:12})"

@@ -90,9 +90,11 @@ Every entry in either array is one non-empty string — one path, or one trap
 written out. A task whose entries are anything else is skipped, with the
 offending field named.
 
-Reporting the files a diff touched outside `files` (ticket 04) is specified but
-not yet built. Everything else both fields feed is live: the agent's brief, and
-the reviewer's criteria.
+Both fields are live everywhere they are specified: the agent's brief, the
+reviewer's criteria, and the scope report in `status.sh` and `review.sh`.
+
+A declared entry ending in `/` covers everything beneath it, so `src/api/` is one
+entry rather than six. Anything else has to match the path exactly.
 
 `launch.sh` validates `files` and `pitfalls` before it creates a worktree, and
 skips a task that fails with an error naming the missing field. The tasks after

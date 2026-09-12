@@ -47,6 +47,12 @@ Capped by herdr at 300000; above that the launch fails with
 Neither **approves** — a passing gate has never meant mergeable, and a real defect
 has passed both.
 
+**Stray** — a file a task's diff touched that no entry in its declared `files`
+covers. Reported by `status.sh` and `review.sh`, never enforced: a new test file
+or a package import is a legitimate stray, and a false bounce costs more than
+reading the line. Not to be confused with [drift](#the-plumbing), which is about
+the skill diverging from this repo.
+
 **Soundness** — whether the code a verify command exercised resolved inside the
 task's own worktree. `sound` was established, `unsound` resolved somewhere else,
 `unknown` could not be established at all, `disabled` means the check was turned

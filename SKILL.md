@@ -390,7 +390,8 @@ schema, because the scripts depend on this one:
   empty array is rejected, and so is one whose entries are not strings. It
   reaches the agent in the brief as the expected scope. Straying outside it is
   not an error: legitimate strays exist and a false bounce costs more than a line
-  to read. Reporting those strays at the gate is ticket 04, not yet built.
+  to read. `status.sh` and `review.sh` both name the strays (sections 7 and 10),
+  and neither blocks on them.
 - `pitfalls` is what you found by reading that code, and it is **required**. Each
   entry is a trap the agent would otherwise have to discover: a caller you would
   not expect, a fixture that freezes the clock, a name that means two things. The
@@ -502,6 +503,17 @@ VERIFY and CRITIQUE results. A task is ready for the gate only when the first
 three line up: herdr `idle` or `done`, `status: success`, and a clean tree. An
 agent name ending in `@B` ran on the second Antigravity account, because the
 first was at 0% when it was launched; one ending in `*` fell back to codex.
+
+Before that comes a **SCOPE** block, and only when there is something to say:
+the files a task changed that its declared `files` did not cover, and the diff's
+size when it ran past the roughly-400-line guideline. Both are advisory and
+neither blocks a task. A stray is usually legitimate — a new test file, a package
+import — so read the line and move on; a false bounce costs more than that. An
+oversized diff is already written by the time you see it, so the call-out is for
+the next task, not this one. A task inside its declared files and under the
+guideline prints nothing here at all, which is what makes the block worth reading
+when it does appear. The same lines come from the same reader in `review.sh`
+(section 10), so the two views cannot disagree.
 
 The output ends with a **NEXT** block: one prescriptive command per task
 (`logs.sh`, `verify.sh`, `critique.sh`, or `review.sh`). Follow it rather than
@@ -644,7 +656,9 @@ scripts/review.sh <task-name>
 
 This prints which model produced the work, which account ran it or whether it
 fell back to codex, the verify status, the critique verdict and its issues, each
-declared pitfall the reviewer examined and what it found, the commit log and
+declared pitfall the reviewer examined and what it found, any file the task
+touched outside its declared `files` and whether the diff ran past the size
+guideline (section 7, same reader), the commit log and
 diffstat for `<branch>` against its base, and the worktree path. The pitfall line
 reads `2 of 3 declared examined`, so a reviewer that skipped most of the traps is
 visible here rather than only in the verdict file; a verdict the script
