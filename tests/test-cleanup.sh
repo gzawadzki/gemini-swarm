@@ -50,6 +50,8 @@ reset_world() {
   echo "2026-09-13T00:00:00Z launch  -  run.start  1 task(s)" > "$RUN/.herdr-swarm/trace.log"
   echo '{"status":"pass","cmd":"pytest -q","soundness":"sound"}' > "$RUN/.herdr-swarm/finished.verify.json"
   echo '{"verdict":"pass","confidence":"high","issues":[],"summary":"fine"}' > "$RUN/.herdr-swarm/finished.critique.json"
+  echo '{"model":"jev-latest","questions":{}}' > "$RUN/.herdr-swarm/finished.critique.jev-request.json"
+  echo '{"model":"jev-1.13.0","answers":{}}' > "$RUN/.herdr-swarm/finished.critique.jev-response.json"
   echo done    > "$FAKE_AGENTS/finished.state"
   echo working > "$FAKE_AGENTS/busy.state"
   echo idle    > "$FAKE_AGENTS/silent.state"
@@ -167,6 +169,8 @@ grepok "keeps the trace" "run.start" "$(cat "$ARCH/trace.log")"
 grepok "keeps a status snapshot" "^TASK" "$(cat "$ARCH/status.txt")"
 check  "keeps the verify verdict" "pass" "$(jq -r '.status' "$ARCH/finished.verify.json")"
 check  "keeps the critique verdict" "pass" "$(jq -r '.verdict' "$ARCH/finished.critique.json")"
+check  "keeps the Jev request" "jev-latest" "$(jq -r '.model' "$ARCH/finished.critique.jev-request.json")"
+check  "keeps the Jev response" "jev-1.13.0" "$(jq -r '.model' "$ARCH/finished.critique.jev-response.json")"
 # The diff is the thing removing a worktree destroys, so it has to be taken while
 # the worktree is still there.
 grepok "keeps the diff of an unmerged branch" "new.txt" "$(cat "$ARCH/busy.diff")"

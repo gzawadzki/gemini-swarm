@@ -221,4 +221,17 @@ entry=$(jq -n --arg wt "$WT" '{name:"t1", base_sha:"0000000000000000000000000000
 # must not give the second when it could not read the diff.
 check "unreadable stays unreadable" "no|0" "$(cat "$T/unreadable.out")"
 
+echo
+echo "== 13. Jev automatic acceptance is visible and routes to the merge handoff =="
+reset_worktree
+printf 'two\n' >> "$WT/declared.txt"
+git -C "$WT" commit -qam c
+write_state '["declared.txt"]'
+printf '{"status":"pass","soundness":"sound"}' > "$HERDR_SWARM_STATE_DIR/t1.verify.json"
+printf '{"verdict":"pass","auto_accepted":true,"jev":{"risk_max":0.04}}' \
+  > "$HERDR_SWARM_STATE_DIR/t1.critique.json"
+out=$(status)
+grepok "status labels the automatic pass" "auto-pass" "$out"
+grepok "next step is the merge handoff" "Jev auto-accepted.*merge handoff" "$out"
+
 harness_summary

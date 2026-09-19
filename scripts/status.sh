@@ -101,14 +101,19 @@ for i in $(seq 0 $((n - 1))); do
   # Same deal for CRITIQUE: cached by critique.sh, never computed here. No agent
   # is spawned by a status read.
   critique_file=$(critique_file_for "$name")
+  critique_auto=false
   if [[ -f "$critique_file" ]]; then
     critique=$(jq -r '.verdict // "?"' "$critique_file" 2>/dev/null || echo "?")
+    critique_auto=$(jq -r '.auto_accepted // false' "$critique_file" 2>/dev/null || echo false)
   else
     critique="-"
   fi
 
+  critique_display="$critique"
+  [[ "$critique_auto" == "true" ]] && critique_display="auto-pass"
+
   printf '%-20s %-8s %-12s %-10s %-8s %-6s %-8s %-12s %s\n' \
-    "$name" "$kind" "$herdr_state" "$result" "$tests" "$clean" "$verify" "$critique" "$summary"
+    "$name" "$kind" "$herdr_state" "$result" "$tests" "$clean" "$verify" "$critique_display" "$summary"
 
   # Scope and size are read from git, not from a gate: no agent is spawned and
   # nothing is executed, so a status poll stays free.
@@ -126,7 +131,7 @@ for i in $(seq 0 $((n - 1))); do
   # One compact line per task, not one per column read: status.sh is the script
   # that gets polled, and a chatty trace here would bury the launch and gate
   # events that are actually worth reading back.
-  trace "$name" "poll" "herdr=$herdr_state result=$result clean=$clean verify=$verify critique=$critique"
+  trace "$name" "poll" "herdr=$herdr_state result=$result clean=$clean verify=$verify critique=$critique auto=$critique_auto"
 
   # Decide the single next command for this task.
   if [[ "$herdr_state" == "blocked" ]]; then
@@ -152,6 +157,8 @@ for i in $(seq 0 $((n - 1))); do
   elif [[ "$critique" == "-" ]]; then
     # Tests pass. Spend a cheap model on the diff before spending your own read.
     next_lines+=("$name: verify $verify, ready to critique -> scripts/critique.sh $name")
+  elif [[ "$critique_auto" == "true" ]]; then
+    next_lines+=("$name: Jev auto-accepted the verified diff -> scripts/review.sh $name for the merge handoff")
   elif [[ "$critique" == "revise" || "$critique" == "reject" ]]; then
     next_lines+=("$name: critique says $critique -> scripts/review.sh $name for the issues, then re-prompt the agent")
   else
@@ -172,7 +179,7 @@ echo "NEXT:"
 for line in "${next_lines[@]}"; do echo "  $line"; done
 echo
 echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes + VERIFY pass/skipped"
-echo "               + CRITIQUE run. Both gates filter; neither one approves."
+echo "               + CRITIQUE run. Jev auto-pass approves; every other result still needs a diff read."
 echo "RESULT OVERDUE means the task passed its work_budget_ms and has not written a result file."
 echo "AGENT ending in @B ran on the second Antigravity account, because account A was at 0% when it was launched."
 echo "AGENT ending in * ran on codex because both Antigravity accounts were at 0% for its pool at launch."

@@ -24,6 +24,7 @@ Before it closes anything, `cleanup.sh` writes the run's archive to
 | `status.txt` | a status snapshot taken while the worktrees still existed |
 | `<name>.diff` | each task's diff against its pinned base |
 | `<name>.verify.json`, `<name>.critique.json` | each task's two gate verdicts |
+| `<name>.critique.jev-request.json`, `<name>.critique.jev-response.json` | the typed Jev evidence, when attempted |
 
 Archiving is first precisely because everything after it is destructive: the
 diffs live in the worktrees this script removes, and an agent that will not close
@@ -86,7 +87,8 @@ intentionally retained, such as a backup branch, and why.
   of that work.
 - That task's scratch state is gone from `.herdr-swarm`: `<name>.result.json`,
   `<name>.verify.json`, `<name>.verify.log`, `<name>.critique.json`,
-  `<name>.critique.brief.md`, `<name>.critique.reply.txt`, `<name>.trim.json`,
+  `<name>.critique.brief.md`, `<name>.critique.reply.txt`,
+  `<name>.critique.jev-request.json`, `<name>.critique.jev-response.json`, `<name>.trim.json`,
   `<name>.trim.brief.md`, `<name>.trim.reply.txt`. Remove the directory itself
   only when no active task still uses it. The archive already holds what matters.
 - The cleanup is verified: the task is absent from `herdr workspace list`, its

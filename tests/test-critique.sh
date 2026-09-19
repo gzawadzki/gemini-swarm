@@ -7,8 +7,9 @@
 set -uo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
-harness_fake agy codex
+harness_fake agy codex curl
 export HERDR_ENV=1
+unset TYPESAFE_API_KEY OPENROUTER_API_KEY
 
 SRC="$T/repo"; mkdir -p "$SRC"
 git -C "$SRC" init -q -b main
@@ -34,6 +35,10 @@ write_state() { # worker-model [files-json] [pitfalls-json]
 critique() { ( cd "$RUN" && bash "$REPO/scripts/critique.sh" t1 2>&1 ); }
 verdict() { jq -r "$1" "$HERDR_SWARM_STATE_DIR/t1.critique.json"; }
 brief() { cat "$HERDR_SWARM_STATE_DIR/t1.critique.brief.md"; }
+verify_pass() {
+  jq -n '{status:"pass", cmd:"test-command", soundness:"sound"}' \
+    > "$HERDR_SWARM_STATE_DIR/t1.verify.json"
+}
 
 echo "== 1. task written by the critique model: reviewed by the alternate =="
 write_state "gemini-3.8-flash-high"
@@ -207,6 +212,77 @@ out=$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 )
 # A downgrade the operator never sees is a downgrade that did not happen: this
 # and status.sh are the two places they actually look.
 grepok "review names the violated pitfall" "keep the trailing newline" "$out"
+
+echo
+echo "== 6. Jev auto-accepts a verified, clean, in-scope diff =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+verify_pass
+CLEAN_JEV_RESPONSE='{"model":"jev-1.13.0","answers":{"requirement_missing":{"type":"noul","noul":0.02},"correctness_defect":{"type":"noul","noul":0.04},"unrelated_change":{"type":"noul","noul":0.01},"security_risk":{"type":"noul","noul":0.01},"check_weakened":{"type":"noul","noul":0.03},"regression_test_missing":{"type":"noul","noul":0.02}}}'
+out=$(TYPESAFE_API_KEY='must-not-leak' FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
+check  "exit code"                     "0"            "$rc"
+check  "verdict is pass"               "pass"         "$(verdict .verdict)"
+check  "records automatic acceptance"  "true"         "$(verdict .auto_accepted)"
+check  "records exact Jev model"        "jev-1.13.0"   "$(verdict .jev.model)"
+check  "records maximum risk"           "0.04"         "$(verdict .jev.risk_max)"
+grepok "prints automatic acceptance"    "AUTO-ACCEPTED" "$out"
+nogrep "does not start agy"             "^agy "        "$(cat "$CALL_LOG")"
+nogrep "API key is absent from argv"    "must-not-leak" "$(cat "$CALL_LOG")"
+grepok "request carries the task"       'append world'  "$(cat "$HERDR_SWARM_STATE_DIR/t1.critique.jev-request.json")"
+review_out=$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 )
+grepok "review reports automatic approval" "approval:  automatic" "$review_out"
+
+echo
+echo "== 6b. one high Jev risk escalates to the generative reviewer =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+verify_pass
+FAKE_JEV_RESPONSE='{"model":"jev-1.13.0","answers":{"requirement_missing":{"type":"noul","noul":0.02},"correctness_defect":{"type":"noul","noul":0.04},"unrelated_change":{"type":"noul","noul":0.01},"security_risk":{"type":"noul","noul":0.91},"check_weakened":{"type":"noul","noul":0.03},"regression_test_missing":{"type":"noul","noul":0.02}}}'
+out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RESPONSE="$FAKE_JEV_RESPONSE" critique); rc=$?
+check  "generative verdict remains pass" "pass"  "$(verdict .verdict)"
+check  "does not auto-accept"             "false" "$(verdict .auto_accepted)"
+check  "records the high risk"            "0.91"  "$(verdict .jev.risk_max)"
+grepok "agy reviewer ran"                 "^agy " "$(cat "$CALL_LOG")"
+
+echo
+echo "== 6c. Jev failure falls back without wedging the gate =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+verify_pass
+out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RC=7 critique); rc=$?
+check  "fallback exit code"       "0"     "$rc"
+check  "not auto-accepted"        "false" "$(verdict .auto_accepted)"
+check  "Jev attempt is recorded"  "true"  "$(verdict .jev.attempted)"
+grepok "agy reviewer ran"         "^agy " "$(cat "$CALL_LOG")"
+
+echo
+echo "== 6d. a stray file prevents automatic acceptance =="
+write_state "gemini-3.1-pro-high" '["other.txt"]' '[]'
+verify_pass
+out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RESPONSE="$FAKE_JEV_RESPONSE" critique); rc=$?
+check  "not auto-accepted" "false" "$(verdict .auto_accepted)"
+nogrep "Jev was not called" "^curl " "$(cat "$CALL_LOG")"
+grepok "agy reviewer ran"   "^agy "  "$(cat "$CALL_LOG")"
+
+echo
+echo "== 6e. OpenRouter uses its Decisions endpoint and model name =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+verify_pass
+out=$(OPENROUTER_API_KEY='must-not-leak' FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
+check  "auto-accepted"             "true" "$(verdict .auto_accepted)"
+check  "route recorded"            "openrouter" "$(verdict .jev.route)"
+grepok "uses Decisions endpoint"   'openrouter.ai/api/alpha/decisions' "$(cat "$CALL_LOG")"
+grepok "uses OpenRouter model id"  '~typesafe/jev-latest' "$(cat "$HERDR_SWARM_STATE_DIR/t1.critique.jev-request.json")"
+nogrep "API key is absent from argv" "must-not-leak" "$(cat "$CALL_LOG")"
+
+echo
+echo "== 6f. protected paths never auto-accept =="
+mkdir -p "$SRC/auth"
+echo policy > "$SRC/auth/policy.txt"
+git -C "$SRC" add auth/policy.txt && git -C "$SRC" commit -qm protected-change
+write_state "gemini-3.1-pro-high" '["file.txt","auth/policy.txt"]' '[]'
+verify_pass
+out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
+check  "not auto-accepted" "false" "$(verdict .auto_accepted)"
+nogrep "Jev was not called" "^curl " "$(cat "$CALL_LOG")"
+grepok "agy reviewer ran"   "^agy "  "$(cat "$CALL_LOG")"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

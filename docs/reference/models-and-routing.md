@@ -70,7 +70,8 @@ If the user names a model outright, use it and skip the heuristic.
 
 ## The critique reviewer
 
-`critique.sh` runs on `gemini-3.8-flash-high` by default, and swaps to
-`gemini-3.1-pro-high` when that would mean a model reviewing its own output.
-Both stay on the Gemini pool. The full rules are in
-[the gate](the-gate.md#the-reviewer-is-a-different-model).
+`critique.sh` first uses Jev for typed risk scoring when a TypeSafe or OpenRouter
+key is available and the diff satisfies the automatic-acceptance preconditions.
+Anything Jev cannot clear falls through to `gemini-3.8-flash-high`, which swaps
+to `gemini-3.1-pro-high` when that would mean a model reviewing its own output.
+The full rules are in [the gate](the-gate.md#stage-2-critique-the-judgement-half).

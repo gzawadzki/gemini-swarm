@@ -62,6 +62,8 @@ critique_confidence=""
 critique_checked="[]"
 critique_declared=0
 critique_reviewer_verdict=""
+critique_auto=false
+critique_jev_risk=""
 if [[ -f "$critique_file" ]]; then
   critique_verdict=$(jq -r '.verdict // "?"' "$critique_file" 2>/dev/null || echo "?")
   critique_summary=$(jq -r '.summary // ""' "$critique_file" 2>/dev/null || echo "")
@@ -71,6 +73,8 @@ if [[ -f "$critique_file" ]]; then
   critique_checked=$(jq -c '.pitfalls_checked // []' "$critique_file" 2>/dev/null || echo "[]")
   critique_declared=$(jq -r '.pitfalls_declared // 0' "$critique_file" 2>/dev/null || echo 0)
   critique_reviewer_verdict=$(jq -r '.reviewer_verdict // ""' "$critique_file" 2>/dev/null || echo "")
+  critique_auto=$(jq -r '.auto_accepted // false' "$critique_file" 2>/dev/null || echo false)
+  critique_jev_risk=$(jq -r '.jev.risk_max // empty' "$critique_file" 2>/dev/null || echo "")
 fi
 
 scope_report "$entry" "$worktree_path"
@@ -101,6 +105,9 @@ elif [[ "$verify_soundness" == "disabled" ]]; then
   echo "           resolution was not checked (HERDR_SWARM_NO_SOUNDNESS=1)"
 fi
 echo "critique:  $critique_verdict${critique_model:+ (${critique_model}${critique_confidence:+, confidence: $critique_confidence})}"
+if [[ "$critique_auto" == "true" ]]; then
+  echo "approval:  automatic (Jev max risk $critique_jev_risk)"
+fi
 case "$critique_verdict" in
   "not run") echo "           run scripts/critique.sh $NAME first; it is cheaper than your attention" ;;
   revise|reject) echo "           the reviewer wants changes; the issues below are what to send back" ;;
@@ -137,6 +144,11 @@ echo
 echo "--- diffstat ---"
 git -C "$worktree_path" diff --stat "${base_ref}...HEAD" || echo "(diff failed, check base ref)"
 echo
-echo "Read the full diff yourself before deciding. A verify pass means the tests ran"
-echo "and a critique pass means one cheap model found nothing; neither is approval:"
+if [[ "$critique_auto" == "true" ]]; then
+  echo "Jev approved this verified, clean, complete and in-scope diff automatically."
+  echo "The branch is ready for the merge handoff; inspect the diff only if you want to:"
+else
+  echo "Read the full diff yourself before deciding. A verify pass means the tests ran"
+  echo "and an ordinary critique pass means one cheap model found nothing; neither is approval:"
+fi
 echo "  git -C \"$worktree_path\" diff ${base_ref}...HEAD"

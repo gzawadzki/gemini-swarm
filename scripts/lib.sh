@@ -809,21 +809,25 @@ resolve_verify_cmd() {
 # --- Machine critique, the judgement half of the gate ------------------------
 #
 # verify.sh answers "does it still build and pass tests". It cannot answer "is
-# this the change that was asked for", and that is the question that actually
-# costs the orchestrator a full diff read. critique.sh puts a cheap model on it
-# first, running one-shot print mode on the Antigravity Gemini pool, so a diff
-# that ignored half the task or quietly deleted a test gets bounced back to its
-# author without spending any of the orchestrator's attention.
-#
-# This advises, it never approves. A `pass` here means one cheap model found
-# nothing, which is weaker evidence than a test run, so it narrows what needs
-# reading rather than replacing the read.
+# this the change that was asked for". critique.sh first gives a verified,
+# bounded diff to Jev as typed risk questions. A clean answer may approve it;
+# everything else falls through to the existing generative reviewer. Neither
+# path merges or edits the user's branch.
 
 # Model the critique runs on. Deliberately a flash tier: the job is spotting
 # obvious divergence from the brief, not out-reasoning the agent that wrote it.
 CRITIQUE_MODEL="${HERDR_SWARM_CRITIQUE_MODEL:-gemini-3.8-flash-high}"
 CRITIQUE_EFFORT="${HERDR_SWARM_CRITIQUE_EFFORT:-medium}"
 CRITIQUE_TIMEOUT="${HERDR_SWARM_CRITIQUE_TIMEOUT:-600}"
+
+# Jev is the fast path through the judgement gate. A configured API key enables
+# it by default; unset the flag to return to the generative-only path. The
+# threshold is P(problem), so lower is stricter. Keep the model configurable:
+# once a threshold is calibrated against a version, pin that version here.
+JEV_AUTO_ACCEPT="${HERDR_SWARM_JEV_AUTO_ACCEPT:-1}"
+JEV_ACCEPT_MAX="${HERDR_SWARM_JEV_ACCEPT_MAX:-0.10}"
+JEV_MODEL="${HERDR_SWARM_JEV_MODEL:-}"
+JEV_TIMEOUT="${HERDR_SWARM_JEV_TIMEOUT:-60}"
 
 # A model reviewing its own output shares its own blind spots, so a task that
 # was written by CRITIQUE_MODEL is reviewed by this one instead. It stays on the
@@ -937,6 +941,10 @@ _archive_collect() {  # <dir> <state-file>
     name=$(jq -r '.name' <<<"$entry")
     cp "$(verify_file_for "$name")"   "$dir/$name.verify.json"   2>/dev/null || true
     cp "$(critique_file_for "$name")" "$dir/$name.critique.json" 2>/dev/null || true
+    cp "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}/$name.critique.jev-request.json" \
+       "$dir/$name.critique.jev-request.json" 2>/dev/null || true
+    cp "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}/$name.critique.jev-response.json" \
+       "$dir/$name.critique.jev-response.json" 2>/dev/null || true
     worktree=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" \
                                 "$(jq -r '.workspace_id // empty' <<<"$entry")")
     [[ -n "$worktree" && -d "$worktree" ]] || continue

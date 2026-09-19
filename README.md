@@ -3,8 +3,8 @@
 A Claude Code skill for running parallel Gemini CLI / Antigravity CLI (`agy`)
 sub-agents through [herdr](https://github.com/herdr). Each task gets its own git
 worktree and branch, runs with auto-approve enabled, and passes a two-stage
-egress gate — the project's tests, then a cheap-model critique of the diff —
-before you read it and decide what lands on your branch. When the Antigravity
+egress gate — the project's tests, then a typed Jev risk check or a generative
+critique — before you decide what lands on your branch. When the Antigravity
 quota of your main account is empty, tasks run on a second Antigravity account;
 when that one is empty too, they run on `codex`.
 
@@ -13,6 +13,8 @@ when that one is empty too, they run on `codex`.
 - `herdr`, and Claude Code must be started **inside** a herdr pane
   (`HERDR_ENV=1`). The scripts refuse to run otherwise.
 - `bash`, `git`, `jq`
+- Optional for automatic acceptance: `curl` and either `TYPESAFE_API_KEY` or
+  `OPENROUTER_API_KEY`
 - At least one agent binary: `agy` (Antigravity CLI), `gemini` (classic Gemini
   CLI), or `codex` (OpenAI Codex CLI)
 - Optional, for the second Antigravity account: PowerShell 7 (`pwsh`) and a
@@ -112,15 +114,17 @@ touched. Resolved elsewhere is a `fail`; undeterminable is `skipped`, never a
 scripts/verify.sh <task-name>
 ```
 
-**5. Critique** — the judgement half. A cheap model on the Gemini pool reads the
-diff against the task's own prompt and answers what the tests cannot: is this the
-change that was asked for. See [Machine critique](#machine-critique):
+**5. Critique** — the judgement half. Jev first evaluates typed risk signals for
+a verified, clean, in-scope diff. It automatically accepts only when every risk
+is at or below the configured threshold; otherwise a generative reviewer reads
+the diff. See [Machine critique](#machine-critique):
 
 ```bash
 scripts/critique.sh <task-name>
 ```
 
-**6. Review the diff** before merging anything, for tasks the gate cleared:
+**6. Review the handoff** before merging anything. `review.sh` says whether Jev
+automatically accepted the change or a human diff read is still required:
 
 ```bash
 scripts/review.sh <task-name>
@@ -213,9 +217,16 @@ event vocabulary per script.
 ## Machine critique
 
 `verify.sh` answers "does it still build". It cannot answer "did the agent do
-what it was asked", and that is the question that costs a full diff read. So
-`critique.sh` puts a cheap model on it first, one-shot on the Antigravity Gemini
-pool, and writes a structured verdict to `.herdr-swarm/<name>.critique.json`.
+what it was asked", and that is the question that costs a full diff read.
+`critique.sh` first asks Jev a fixed set of typed yes/no risk questions and writes
+a structured verdict to `.herdr-swarm/<name>.critique.json`.
+
+Jev can automatically accept only a verified, clean, untruncated diff with no
+strays, oversize report, or protected paths. Every risk probability — missing
+requirements, correctness, unrelated behavior, security, weakened checks,
+missing regression tests, and declared pitfalls — must be at or below `0.10` by
+default. Anything uncertain, unavailable, or above threshold falls through to
+the existing generative reviewer. It never auto-merges.
 
 The reviewer gets the task's original prompt, the diff against its base, and a
 fixed rubric: completeness, scope (deleted tests, disabled checks, unrelated
@@ -224,7 +235,8 @@ by instruction, since they produce noise rather than blockers.
 
 | verdict | meaning |
 |---------|---------|
-| `pass` | no blocker or major issue found — read the diff anyway |
+| `pass` with `auto_accepted: true` | Jev cleared every risk signal — ready for the merge handoff |
+| ordinary `pass` | no blocker or major issue found — read the diff |
 | `revise` | real problems; send the issue list back to the agent |
 | `reject` | wrong approach or dangerous; re-prompting will not fix it |
 | `skipped` | no diff, or no reviewer binary on PATH |
@@ -234,9 +246,8 @@ Only `revise` and `reject` exit non-zero, so a broken reviewer never wedges the
 pipeline — it falls through to your own read. The verdict shows up in the
 CRITIQUE column of `status.sh` and at the top of `review.sh`.
 
-**This advises, it never approves.** A `pass` is one cheap model's opinion of
-another model's work, which is weaker evidence than the test run, not stronger.
-It narrows what you have to read; it does not replace reading it.
+Only Jev's bounded `auto_accepted: true` path approves without a full diff read.
+An ordinary generative `pass` remains advice and still requires the read.
 
 The reviewer is never the model that wrote the diff when that can be avoided: a
 task written by the critique model is reviewed by
@@ -247,6 +258,11 @@ fallback task critiqued by codex, prints a warning and writes
 
 | Variable | Effect |
 |----------|--------|
+| `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY` | Enables Jev; TypeSafe wins when both are set. |
+| `HERDR_SWARM_JEV_AUTO_ACCEPT` | Set to `0` to disable automatic acceptance; default `1`. |
+| `HERDR_SWARM_JEV_ACCEPT_MAX` | Maximum allowed probability for every risk signal; default `0.10`. |
+| `HERDR_SWARM_JEV_MODEL` | Override the route's default Jev model. |
+| `HERDR_SWARM_JEV_TIMEOUT` | Request timeout in seconds; default `60`. |
 | `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.8-flash-high`. |
 | `HERDR_SWARM_CRITIQUE_ALT_MODEL` | Reviewer for tasks the critique model wrote itself, default `gemini-3.1-pro-high`. |
 | `HERDR_SWARM_CRITIQUE_KIND` | Force `agy`, `codex` or `gemini` instead of auto-picking. |

@@ -41,16 +41,16 @@ Capped by herdr at 300000; above that the launch fails with
 
 ## The gate
 
-**Egress gate** — the two stages a diff passes before the orchestrator reads it:
+**Egress gate** — the two stages a diff passes before the merge handoff:
 `verify.sh` (deterministic: do the tests run, on this worktree's code) then
-`critique.sh` (a cheap model grading the diff against the task). Both **filter**.
-Neither **approves** — a passing gate has never meant mergeable, and a real defect
-has passed both.
+`critique.sh` (Jev typed risk signals, with a generative reviewer as fallback).
+Jev alone may **approve** a verified, clean, bounded diff without a full read.
+That approval never means auto-merge; the user still decides what lands.
 
 **Stray** — a file a task's diff touched that no entry in its declared `files`
-covers. Reported by `status.sh` and `review.sh`, never enforced: a new test file
-or a package import is a legitimate stray, and a false bounce costs more than
-reading the line. Not to be confused with [drift](#the-plumbing), which is about
+covers. Reported by `status.sh` and `review.sh`; any stray blocks Jev automatic
+acceptance but does not fail the generative review, because a new test file or a
+package import can be legitimate. Not to be confused with [drift](#the-plumbing), which is about
 the skill diverging from this repo.
 
 **Soundness** — whether the code a verify command exercised resolved inside the

@@ -1,9 +1,9 @@
 # Reference: the egress gate
 
-Two stages stand between an auto-approving agent's diff and the orchestrator's
-attention: `verify.sh`, which is deterministic, and `critique.sh`, which is a
-cheap model's judgement. Both **filter**. Neither **approves** — a passing gate
-has never meant mergeable, and a real defect has passed both.
+Two stages stand between an auto-approving agent's diff and the merge handoff:
+`verify.sh`, which is deterministic, and `critique.sh`, which first uses Jev's
+typed risk signals and falls back to a generative reviewer. Jev may approve a
+strictly bounded result without a full diff read. No gate result merges code.
 
 The vocabulary here — gate, soundness, stray — is defined in
 [CONTEXT.md](../../CONTEXT.md).
@@ -56,13 +56,46 @@ scripts/critique.sh <task-name>
 ```
 
 A passing test suite says nothing about whether the agent did what it was asked.
-That question is what actually costs a full diff read, so a cheap model goes
-first. `critique.sh` runs one-shot print mode on the Antigravity Gemini pool,
-hands the reviewer the task's original prompt plus the diff against its base, and
-asks for a verdict against a fixed rubric: the declared pitfalls, completeness,
-scope (deleted tests, disabled checks, unrelated edits), correctness, safety,
-tests. Style and refactor opinions are explicitly out of scope, because they
-generate noise rather than blockers.
+That question is what actually costs a full diff read, so `critique.sh` starts
+with a narrow Jev decision and escalates anything it cannot safely clear.
+
+### Jev automatic acceptance
+
+Jev runs only when `TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` is present. The
+TypeSafe route wins when both are set. The request asks separate Noul questions
+whose answers are probabilities that a bad condition is true:
+
+- a material requirement is missing;
+- the diff contains a concrete correctness defect;
+- it changes unrelated behavior;
+- it introduces a security or destructive-operation risk;
+- it weakens an existing check;
+- changed behavior lacks a reasonable regression test;
+- each declared pitfall is violated.
+
+Automatic acceptance requires every answer to be at or below
+`HERDR_SWARM_JEV_ACCEPT_MAX` (`0.10` by default). It also requires verify `pass`,
+a clean worktree, a complete diff, readable scope data, no strays, no oversize
+report, and no protected paths such as credentials, authorization, security,
+permissions, CODEOWNERS, CI workflows, or environment-secret files. These are
+hard preconditions, not additional model questions.
+
+Malformed responses, request failures, high risk, missing keys, and failed
+preconditions all fall through to the generative reviewer. They do not create a
+false pass. The exact request and response are retained as
+`<name>.critique.jev-request.json` and `<name>.critique.jev-response.json`; the
+verdict records the route, model, threshold, maximum risk, and every signal.
+The API key is supplied through a permission-restricted temporary curl config,
+not the command line or trace.
+
+### Generative fallback
+
+The fallback runs one-shot print mode on the Antigravity Gemini pool, hands the
+reviewer the task's original prompt plus the diff against its base, and asks for
+a verdict against a fixed rubric: the declared pitfalls, completeness, scope
+(deleted tests, disabled checks, unrelated edits), correctness, safety, tests.
+Style and refactor opinions are explicitly out of scope, because they generate
+noise rather than blockers.
 
 **The declared pitfalls are the first thing it judges.** Each one from the task
 config is numbered in the reviewer's brief as a criterion, and the reply carries a
@@ -74,9 +107,10 @@ is the fix for a real miss: a diff where a translated comment stopped describing
 the code one line below it came back `pass`, `confidence: high`, "completely and
 correctly implemented", because the reviewer had nothing specific to look for.
 
-The declared `files` go in as a scope criterion: the reviewer flags every change
-outside the list and says whether each was necessary. It reports, it does not
-fail — a new test file or a package import is a legitimate stray.
+The declared `files` go in as a scope criterion: the generative reviewer flags
+every change outside the list and says whether each was necessary. It reports,
+it does not fail — a new test file or a package import is a legitimate stray.
+For Jev automatic acceptance, any stray instead forces this fallback.
 
 A reply that marks a pitfall `violated` while returning `pass` contradicts itself
 and the brief it was given, so `critique.sh` downgrades it to `revise` and says
@@ -85,7 +119,8 @@ auditable rather than a quiet rewrite.
 
 | verdict | meaning | what to do |
 |---------|---------|------------|
-| `pass` | no blocker or major issue found | go read the diff |
+| `pass` with `auto_accepted: true` | Jev cleared every typed risk under all hard preconditions | inspect the merge handoff; a full diff read is optional |
+| ordinary `pass` | the generative reviewer found no blocker or major issue | go read the diff |
 | `revise` | real problems the same agent can fix | bounce the issue list back |
 | `reject` | wrong approach, or dangerous | take it to the user; re-prompting will not fix it |
 | `skipped` | no diff, or no reviewer binary available | read the diff yourself |
@@ -117,6 +152,13 @@ to leave the prompt unchanged. `~/.codex/AGENTS.md` still loads. Set
 
 | variable | default | effect |
 |----------|---------|--------|
+| `TYPESAFE_API_KEY` | unset | use `https://api.typesafe.ai/v1/systemone`; preferred when both keys exist |
+| `OPENROUTER_API_KEY` | unset | use `https://openrouter.ai/api/alpha/decisions` when no TypeSafe key exists |
+| `HERDR_SWARM_JEV_AUTO_ACCEPT` | `1` | `0` disables the Jev path |
+| `HERDR_SWARM_JEV_ACCEPT_MAX` | `0.10` | maximum accepted probability for every bad-condition signal; must be in `[0, 0.5)` |
+| `HERDR_SWARM_JEV_MODEL` | route default | override `jev-latest` or `~typesafe/jev-latest` |
+| `HERDR_SWARM_JEV_TIMEOUT` | `60` | request timeout in seconds |
+| `HERDR_SWARM_JEV_URL` | route default | endpoint override, primarily for a compatible gateway or tests |
 | `HERDR_SWARM_CRITIQUE_MODEL` | `gemini-3.8-flash-high` | the reviewer model |
 | `HERDR_SWARM_CRITIQUE_ALT_MODEL` | `gemini-3.1-pro-high` | used when the default would review its own work |
 | `HERDR_SWARM_CRITIQUE_KIND` | auto | force `agy`, `codex` or `gemini` |
@@ -139,8 +181,10 @@ so the two views cannot disagree:
   well-sized work is a report nobody reads. `HERDR_SWARM_DIFF_LINES` moves the
   aim and the threshold follows it.
 
-Neither ever blocks. An oversized diff is already written by the time anyone sees
-it, so the call-out is for the next task, not this one.
+Neither fails the generative review. Either finding does block Jev automatic
+acceptance and routes the diff to that reviewer. An oversized diff is already
+written by the time anyone sees it, so the call-out is also useful for the next
+task.
 
 ## After the gate: the optional trim review
 
@@ -165,12 +209,14 @@ agents into cutting corners that matter.
 ## What the gate does not do
 
 - A verify `pass` means the tests ran, not that the change is correct or safe.
-- A critique `pass` means one cheap model, reviewing another model's work, found
-  nothing — weaker evidence than the test run, and produced by exactly the kind
-  of system this gate exists to distrust.
+- An ordinary generative critique `pass` means one cheap model, reviewing another
+  model's work, found nothing; it does not replace a diff read.
+- Jev automatic acceptance is a bounded policy decision, not proof that the code
+  is correct. Protected, large, dirty, incomplete, or out-of-scope changes cannot
+  take that path.
 - A critique `reject` is information, not authority. It can be wrong. Read the
   diff before throwing work away on its say-so.
 - A trim suggestion is not a finding. Never apply cuts without reading them.
 
-The diff read is still the only thing between an auto-approving agent and the
-user's branch.
+The user-controlled merge handoff is still the only thing between an
+auto-approving agent and the user's branch. The scripts never auto-merge.

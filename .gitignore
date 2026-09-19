@@ -5,3 +5,8 @@
 
 # Per-run swarm state, written next to whatever repo the swarm was launched from.
 .herdr-swarm/
+
+# Local credentials and overrides. Keep the documented template in Git.
+.env
+.env.*
+!.env.example

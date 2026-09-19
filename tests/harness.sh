@@ -208,6 +208,23 @@ echo '{"verdict":"pass","confidence":"medium","issues":[],"summary":"fine"}'
 FAKE
 }
 
+# curl: Jev's HTTP transport. It records arguments (the API key is deliberately
+# supplied through a curl config file, so it must never appear here), then emits
+# the caller-provided response. A non-zero rc exercises the generative fallback.
+# Knobs: FAKE_JEV_RESPONSE, FAKE_JEV_RC.
+_harness_fake_curl() {
+  cat > "$BIN/curl" <<'FAKE'
+#!/usr/bin/env bash
+echo "curl $*" >> "$CALL_LOG"
+if [[ "${FAKE_JEV_RC:-0}" != "0" ]]; then exit "$FAKE_JEV_RC"; fi
+if [[ -n "${FAKE_JEV_RESPONSE:-}" ]]; then
+  printf '%s\n' "$FAKE_JEV_RESPONSE"
+else
+  printf '{}\n'
+fi
+FAKE
+}
+
 # pwsh stands in for the account script: -Mode list reports the vault, -Mode use
 # returns the exit code the scenario is testing and records the new live account.
 # Knobs: FAKE_VAULT_B (full|empty), FAKE_SWITCH_RC.
