@@ -10,3 +10,7 @@
 .env
 .env.*
 !.env.example
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
