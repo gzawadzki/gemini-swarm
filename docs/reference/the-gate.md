@@ -235,5 +235,23 @@ agents into cutting corners that matter.
   diff before throwing work away on its say-so.
 - A trim suggestion is not a finding. Never apply cuts without reading them.
 
-The user-controlled merge handoff is still the only thing between an
-auto-approving agent and the user's branch. The scripts never auto-merge.
+Integration requires user authorization: standing end-to-end delivery permission
+in autonomous mode, or a per-handoff decision in interactive mode. See SKILL.md's
+Autonomous delivery contract. The scripts themselves never auto-merge.
+
+## Recover infrastructure failures without stopping delivery
+
+A skipped soundness check is not a test pass. For a Python project without
+pyproject.toml, explicitly assert that each changed module's resolved __file__ is
+inside the pinned worker worktree, then run the tests in that same interpreter
+with an explicit worktree sys.path. Save command, resolved paths, commit hash and
+output in the delivery record. Keep the original skipped verdict intact; record
+this as separate manual verification evidence. Do not disable soundness to get a
+green gate. Failed assertions block integration.
+
+For an unparseable/error critique, inspect the response and retry at most once
+if the failure is transient. Otherwise perform the documented full-diff review,
+checking each requirement, declared pitfall, tests and strays, and record findings
+and the coordinator's verdict. This is manual review, not a fabricated reviewer
+pass. An actual revise/reject requires resolving the findings, not this fallback.
+Routine tool-format failures do not require asking the user to manage the run.

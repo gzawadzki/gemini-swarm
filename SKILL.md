@@ -34,6 +34,50 @@ whose correctness depends on several decisions staying together.
   four files. Resist growing features here; the maintenance drag is the failure
   mode.
 
+## Autonomous delivery contract
+
+When the user asks for autonomous/end-to-end delivery, treat that as standing
+permission to integrate verified, in-scope worker changes locally. Do not ask for
+permission again for every slice, merge or seeded-file update. Record this mode,
+the authorized scope and integration strategy in a run-side delivery record
+alongside the task config (not invented fields in the launcher schema). Without
+that authorization, retain the interactive handoff in step 9.
+
+The orchestrator owns delivery, not just launch. Delegate implementation and
+fixes to workers; do recon, scheduling, verification, review and integration as
+coordinator. Do not substitute your own implementation when a worker stalls.
+Finish the requested feature and its acceptance checks rather than stopping after
+an incidental audit fix. Launch independent slices in parallel when safe.
+
+Before launch, inspect dirty AND untracked files. Worktrees from HEAD do not
+contain them. Snapshot only task-relevant files, preserving bytes and SHA-256
+hashes, outside the working checkout; exclude secrets. Prefer a dedicated
+integration worktree with a committed, scoped baseline containing those files,
+then launch workers from that baseline. Do not stage or commit the user's entire
+dirty tree. If using copied seeds instead, record their hashes and compare the
+worker result to the seed, not merely HEAD. At integration, apply only that delta
+and recheck destination hashes; preserve unrelated edits. Untracked files are an
+input-management responsibility, not a reason to ask the user what to do.
+
+Keep a durable delivery record: task dependencies, pinned baseline, seed hashes,
+agent/worktree, last status, next action, gate attempts and integration outcome.
+Continue status -> verify -> critique/review -> bounded fixes -> integrate ->
+integration tests -> next ready slices -> archive/cleanup. If the harness offers
+persistent supervision, use its documented mechanism; otherwise monitor within
+the active session. Do not claim background supervision after ending a turn
+unless an actual continuation mechanism is armed. A running agent or a successful
+result JSON is not a delivered feature.
+
+Escalate only a concrete blocker: conflicting user edits that cannot be safely
+preserved, ambiguity outside the authorized scope, unavailable credentials/quota,
+exhausted bounded repair attempts, or destructive/external actions not authorized
+by the user. Record the failed check and exact decision needed. Routine local
+integration is not such a blocker. Standing permission does not authorize pushes,
+deployments, vault publication/migration, secret access or deletion of user data.
+
+These are coordinator instructions, not a claim that launch.sh or status.sh
+implements an autonomous daemon.
+
 ## The flow
 
 ### 0. Check you are inside herdr
@@ -201,16 +245,23 @@ scripts/logs.sh <name> [lines]
 Send fixes back to the same agent rather than rewriting the code yourself — it
 already has the context. Paste the failing command and its output, or the
 critique's issue list verbatim. Cap this at two review-fix rounds per task, then
-surface the problem to the user instead of re-prompting forever.
+reroute as allowed by the worker gate and the user's explicit model choice, or
+report a concrete blocker. Do not re-prompt forever or silently implement the fix yourself.
 
-### 9. Ask the user how to merge
+### 9. Integrate according to the delivery authorization
 
-**Never merge into the user's active branch automatically.** Present the branch
-name, commit log, diff stat, which model produced it, the verify and critique
-results, and your verdict. Then ask: merge, squash, cherry-pick, or discard. This
-changes the branch the user is actively working on, so it gets the same explicit
-confirmation as any other side-effectful action, even though git makes it
-reversible.
+In autonomous mode, integrate accepted, in-scope changes without another prompt.
+Use the recorded strategy: merge/cherry-pick on a clean integration base, or apply
+the reviewed delta against a hashed seed for pre-existing dirty/untracked files.
+Check destination hashes before writing; never force-overwrite competing edits.
+Run feature-level integration tests after applying changes and before launching
+dependent slices. Record branch, commits, model, diffstat, gate evidence and the
+integration result. Keep a recoverable preimage; if integration tests fail, send
+the failure to a worker and do not mark delivery complete.
+
+In interactive mode, present the same evidence and ask merge, squash, cherry-pick
+or discard. Gate acceptance alone never grants permission; autonomous permission
+comes from the user's end-to-end delivery instruction.
 
 ### 10. Clean up, and archive the run
 
@@ -252,7 +303,8 @@ that came out empty. Turn on `--trace` and work from the log.
 - A verify `pass` only means the tests ran. Jev may approve without a full read
   only when all hard preconditions hold and every typed risk signal is below the
   threshold. A generative critique `pass` remains advice and requires step 7.
-  Neither result authorizes an automatic merge into the user's branch.
+  Neither result alone authorizes integration. Use the user's standing autonomous
+  delivery authorization or obtain explicit permission in interactive mode.
 - Treat a critique `reject` as information, not authority, in the other direction
   too. It can be wrong. Read the diff before throwing work away on its say-so.
 - A trim suggestion is not a finding. Never apply cuts without reading them, never

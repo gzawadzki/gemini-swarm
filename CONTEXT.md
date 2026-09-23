@@ -45,7 +45,9 @@ Capped by herdr at 300000; above that the launch fails with
 `verify.sh` (deterministic: do the tests run, on this worktree's code) then
 `critique.sh` (Jev typed risk signals, with a generative reviewer as fallback).
 Jev alone may **approve** a verified, clean, bounded diff without a full read.
-That approval never means auto-merge; the user still decides what lands.
+That approval is not merge permission. The user decides the scope through
+standing autonomous-delivery authorization or an interactive handoff; the
+coordinator integrates only after the applicable checks.
 
 **Stray** — a file a task's diff touched that no entry in its declared `files`
 covers. Reported by `status.sh` and `review.sh`; any stray blocks Jev automatic
