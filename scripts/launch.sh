@@ -26,7 +26,7 @@ command -v herdr >/dev/null 2>&1 || { echo "ERROR: herdr not found on PATH." >&2
 command -v git >/dev/null 2>&1 || { echo "ERROR: git is required." >&2; exit 1; }
 [[ -f "$TASKS_FILE" ]] || { echo "ERROR: $TASKS_FILE not found." >&2; exit 1; }
 
-if ! worker_sandbox_available && ! worker_unsandboxed_allowed; then
+if ! worker_unsandboxed_allowed; then
   trace "-" "worker.security" "refused: unattended workers require explicit unsandboxed opt-in"
   echo "ERROR: Unattended worker execution is unsandboxed on this platform." >&2
   echo "Workers have unrestricted access to host files, network, and secrets." >&2

@@ -119,15 +119,9 @@ trace_banner() {
 # Pi --approve or --tools provide OS isolation: bash tool execution has full
 # ambient privileges over host files, network, and secrets.
 #
-# An enforceable sandbox requires platform/herdr support. Where no real OS sandbox
-# is available, execution runs unsandboxed. launch.sh fails closed unless the
-# operator explicitly permits unsandboxed worker execution for that run.
-
-worker_sandbox_available() {
-  # Returns 0 only if an enforceable OS sandbox is available.
-  # Neither git worktrees nor Pi --tools/--approve are OS isolation.
-  return 1
-}
+# Because no OS sandbox backend is implemented on this platform or herdr,
+# execution runs unsandboxed. launch.sh fails closed unless the operator
+# explicitly permits unsandboxed worker execution for that run.
 
 worker_unsandboxed_allowed() {
   [[ "${HERDR_SWARM_ALLOW_UNSANDBOXED:-0}" == "1" ]]

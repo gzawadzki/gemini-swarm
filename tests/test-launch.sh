@@ -31,12 +31,12 @@ run_launch() { # runs launch.sh in the dir prepared by new_run_dir
   "pitfalls":["file.txt is read by two callers; keep the trailing newline"],
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
-  ( cd "$dir" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" --allow-unsandboxed "$@" tasks.json 2>&1 )
+  ( cd "$dir" && : > "$HERDR_CALL_LOG" && HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" "$@" tasks.json 2>&1 )
 }
 
 run_config() { # reads a tasks.json body on stdin, runs launch.sh against it
   cat > "$LAST_RUN_DIR/tasks.json"
-  ( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" --allow-unsandboxed "$@" tasks.json 2>&1 )
+  ( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" "$@" tasks.json 2>&1 )
 }
 
 echo "== 1. pi launches with the Antigravity provider =="
@@ -264,7 +264,7 @@ cat > "$LAST_RUN_DIR/tasks.json" <<JSON
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
 : > "$HERDR_CALL_LOG"
-out=$(cd "$LAST_RUN_DIR" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1); rc=$?
+out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_ALLOW_UNSANDBOXED=0 bash "$REPO/scripts/launch.sh" tasks.json 2>&1); rc=$?
 check "exit code is non-zero" "1" "$rc"
 grepok "reports unsandboxed refusal" "Unattended worker execution is unsandboxed" "$out"
 grepok "mentions host access risks" "host files, network, and secrets" "$out"
@@ -274,6 +274,25 @@ check "no worktree created on refusal" "" "$(grep 'worktree create' "$HERDR_CALL
 check "no agent started on refusal" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
 check "no state.json created on refusal" "false" "$([[ -f "$LAST_STATE_DIR/state.json" ]] && echo true || echo false)"
 check "no run.json created on refusal" "false" "$([[ -f "$LAST_STATE_DIR/run.json" ]] && echo true || echo false)"
+
+echo
+echo "== 7b. launches when unsandboxed execution is enabled via CLI flag =="
+new_run_dir
+cat > "$LAST_RUN_DIR/tasks.json" <<JSON
+{"tasks":[{"name":"t1","kind":"pi","model":"gemini-3.1-pro-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":["file.txt"],
+  "pitfalls":["watch the trailing newline"],
+  "ready_timeout_ms":1000,"work_budget_ms":900000}]}
+JSON
+: > "$HERDR_CALL_LOG"
+out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_ALLOW_UNSANDBOXED=0 bash "$REPO/scripts/launch.sh" --allow-unsandboxed tasks.json 2>&1); rc=$?
+check "exit code is zero with flag" "0" "$rc"
+grepok "announces unsandboxed execution via flag" "unsandboxed worker execution explicitly enabled" "$out"
+grepok "agent started via flag" "agent start t1" "$(cat "$HERDR_CALL_LOG")"
+check "run.json records worker isolation" "unsandboxed" "$(jq -r '.worker_isolation' "$LAST_STATE_DIR/run.json")"
+check "run.json records allow_unsandboxed" "true" "$(jq -r '.allow_unsandboxed' "$LAST_STATE_DIR/run.json")"
+check "state.json holds launched task" "t1" "$(jq -r '.[0].name' "$LAST_STATE_DIR/state.json")"
 
 echo
 echo "== 8. launches when unsandboxed execution is enabled via environment variable =="
