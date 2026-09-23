@@ -1,6 +1,6 @@
 # Propozycje usprawnień gemini-swarm na podstawie bazy wiedzy
 
-Status: propozycja do dyskusji. Nie jest planem wdrożenia ani potwierdzeniem skuteczności proponowanych zmian. Nie wdrożono i nie wypchnięto zmian do GitHuba.
+Status: P0 i P1 zaimplementowano na gałęzi `implementation/knowledge-proposal`. Dla P2 udokumentowano ograniczenia danych o kwotach bez zmiany routingu. Skuteczność progu Jev wymaga jeszcze ludzkich ocen archiwalnych diffów; do tego czasu tryb shadow jest domyślny.
 
 ## Stan obecny
 
