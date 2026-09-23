@@ -1,12 +1,11 @@
 # gemini-swarm
 
-A Claude Code skill for running parallel Gemini CLI / Antigravity CLI (`agy`)
-sub-agents through [herdr](https://github.com/herdr). Each task gets its own git
+A Claude Code skill for running parallel Pi agents with `pi-antigravity` through
+[herdr](https://github.com/herdr). Each task gets its own git
 worktree and branch, runs with auto-approve enabled, and passes a two-stage
 egress gate — the project's tests, then a typed Jev risk check or a generative
-critique — before you decide what lands on your branch. When the Antigravity
-quota of your main account is empty, tasks run on a second Antigravity account;
-when that one is empty too, they run on `codex`.
+critique — before you decide what lands on your branch. Pi manages linked
+Antigravity accounts and retries another account on a hard quota failure.
 
 ## Requirements
 
@@ -15,10 +14,8 @@ when that one is empty too, they run on `codex`.
 - `bash`, `git`, `jq`
 - Optional for automatic acceptance: `curl` and either `TYPESAFE_API_KEY` or
   `OPENROUTER_API_KEY`
-- At least one agent binary: `agy` (Antigravity CLI), `gemini` (classic Gemini
+- At least one agent binary: `pi` with `pi-antigravity`, `gemini` (classic Gemini
   CLI), or `codex` (OpenAI Codex CLI)
-- Optional, for the second Antigravity account: PowerShell 7 (`pwsh`) and a
-  second Antigravity login, see "Quota: two Antigravity accounts, then codex" below
 
 ## Install
 
@@ -44,7 +41,7 @@ writes the config and drives the scripts. To do it manually:
   "tasks": [
     {
       "name": "fix-auth-bug",
-      "kind": "agy",
+      "kind": "pi",
       "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/fix-auth-bug",
@@ -61,9 +58,9 @@ writes the config and drives the scripts. To do it manually:
 }
 ```
 
-Run `agy models` to see the live model list. Most slugs bake the reasoning effort
-into the name, so `gemini-3.1-pro-high` and `gemini-3.1-pro-low` are separate
-models. By default the swarm routes tasks to Gemini models (the large, cheap
+Run `/antigravity.models` in Pi to see the live model list. The task config may
+use `gemini-3.1-pro-high`, which launches as `gemini-3.1-pro` with high thinking.
+By default the swarm routes tasks to Gemini models (the large, cheap
 Antigravity pool) and reserves `claude-*`/`gpt-*` slugs for when you name them
 explicitly — the idea is that Claude does the orchestration and review while the
 swarm does volume.
@@ -83,6 +80,12 @@ is accepted with a warning, so "I read it and found none" stays expressible.
 Write the `prompt` specifically enough to be checkable. Step 5 grades the diff
 against it, so a reviewer can measure "add a retry with backoff to the S3 upload
 in storage.py and cover it with a test" but not "improve error handling".
+
+Before writing the config, apply the [worker gate](docs/reference/models-and-routing.md#worker-gate):
+send a bounded implementation with one decisive check to Pi Antigravity; use
+`kind: "codex"`, `model: "gpt-6-luna"`, `effort: "xhigh"` when a scoped task
+needs one agent to resolve competing causes or preserve a contract across
+modules. Both routes get a worktree and the same review gate.
 
 [docs/reference/task-definition.md](docs/reference/task-definition.md) covers the
 whole schema, the test for whether a unit of work is small enough to hand over at
@@ -144,9 +147,8 @@ scripts/trim.sh <task-name>
 scripts/logs.sh <task-name> [lines]
 ```
 
-**8. Close the agents** when you are done with them. A finished agy agent does
-not exit on its own; it sits in its pane still holding the shared Antigravity
-credential, which blocks the next account switch:
+**8. Close the agents** when you are done with them. A finished Pi agent stays
+in its pane until cleanup closes it:
 
 ```bash
 scripts/cleanup.sh                 # close agents that reported a result
@@ -172,7 +174,7 @@ a pointer from each step to the reference it needs. The references are:
 |----------|---------------|
 | [defining a task](docs/reference/task-definition.md) | the slice test, every schema field, and the rules for writing a prompt |
 | [models and routing](docs/reference/models-and-routing.md) | the three agent kinds, the model menu, and which slug a task should get |
-| [accounts and quota](docs/reference/accounts-and-quota.md) | the two pools, the second Antigravity account, and the codex fallback |
+| [accounts and quota](docs/reference/accounts-and-quota.md) | Pi's account and quota commands |
 | [the egress gate](docs/reference/the-gate.md) | verify, soundness, critique, scope and size, and the optional trim review |
 | [cleanup and the run archive](docs/reference/cleanup-and-archive.md) | what gets closed, what gets removed, and what the archive keeps |
 | [troubleshooting](docs/reference/troubleshooting.md) | trace mode, and every trap this project has actually hit |
@@ -192,13 +194,12 @@ For a whole session use `HERDR_SWARM_TRACE=1` instead; `--no-trace` on a single
 call overrides it. It is off by default, and while off it creates no file and
 spawns no subprocess.
 
-Each external call the swarm makes — `herdr`, `agy`, `codex`, `git`, the verify
+Each external call the swarm makes — `herdr`, `pi`, `codex`, `git`, the verify
 command — gets one line in `.herdr-swarm/trace.log` with a timestamp, the script
 that wrote it, the task, the event, and the command with its exit code:
 
 ```
-2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
-2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.8-flash-high
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  pi for model gemini-3.8-flash-high
 2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
 ```
 
@@ -208,8 +209,7 @@ It appends; delete it yourself when it gets long. Prompts are recorded as a byte
 count only, so the log stays safe to paste.
 
 This is for the failures that look like success: a prompt herdr accepted but the
-agent never saw (`prompt.stalled`, `prompt.lost`), a quota read that failed open
-(`quota.read`), a base ref that resolved to the branch tip and made the diff look
+agent never saw (`prompt.stalled`, `prompt.lost`), a base ref that resolved to the branch tip and made the diff look
 empty (`base.resolve`, `diff.collect`). The
 [troubleshooting reference](docs/reference/troubleshooting.md) lists the full
 event vocabulary per script.
@@ -253,7 +253,7 @@ The reviewer is never the model that wrote the diff when that can be avoided: a
 task written by the critique model is reviewed by
 `HERDR_SWARM_CRITIQUE_ALT_MODEL` instead. The verdict file records
 `worker_model` and `independent`; the one unavoidable self-review, a codex
-fallback task critiqued by codex, prints a warning and writes
+codex task critiqued by the same codex model, prints a warning and writes
 `"independent": false`.
 
 | Variable | Effect |
@@ -265,7 +265,7 @@ fallback task critiqued by codex, prints a warning and writes
 | `HERDR_SWARM_JEV_TIMEOUT` | Request timeout in seconds; default `60`. |
 | `HERDR_SWARM_CRITIQUE_MODEL` | Reviewer model, default `gemini-3.8-flash-high`. |
 | `HERDR_SWARM_CRITIQUE_ALT_MODEL` | Reviewer for tasks the critique model wrote itself, default `gemini-3.1-pro-high`. |
-| `HERDR_SWARM_CRITIQUE_KIND` | Force `agy`, `codex` or `gemini` instead of auto-picking. |
+| `HERDR_SWARM_CRITIQUE_KIND` | Force `pi`, `codex` or `gemini` instead of auto-picking. |
 | `HERDR_SWARM_CRITIQUE_EFFORT` | Reasoning effort for the codex path, default `medium`. |
 | `HERDR_SWARM_CRITIQUE_TIMEOUT` | Seconds before the reviewer is killed, default `600`. |
 | `HERDR_SWARM_CRITIQUE_DIFF_LINES` | Diff lines pasted into the brief, default `1500`. Past this the brief is truncated and the reviewer is told to read the repo itself. |
@@ -286,95 +286,38 @@ corners that matter. Correctness first, trimming second, commit last.
 | Variable | Effect |
 |----------|--------|
 | `HERDR_SWARM_TRIM_MODEL` | Model for the trim pass, default the critique model. |
-| `HERDR_SWARM_TRIM_KIND` | Force `agy`, `codex` or `gemini`. |
+| `HERDR_SWARM_TRIM_KIND` | Force `pi`, `codex` or `gemini`. |
 | `HERDR_SWARM_TRIM_TIMEOUT` | Seconds before it is killed, default the critique timeout. |
 
-## Quota: two Antigravity accounts, then codex
+## Antigravity through Pi
 
-Antigravity meters two quota pools separately, **Gemini Models** for `gemini-*`
-slugs and **Claude and GPT models** for `claude-*` and `gpt-*` slugs, each with a
-weekly and a five-hour window. An agent started against an empty pool cannot make
-a single call, and in herdr it looks identical to an agent still thinking.
+Install Pi and its Antigravity provider, then sign in from Pi:
 
-So `launch.sh` reads `agy -p "/usage"` before it starts anything. If the pool a
-task's model draws from reads 0% in either window, the swarm switches the live
-Antigravity account and runs the task on the other subscription. If that one is
-empty too, or there is no second account, the task runs on `codex` with
-`gpt-5.6-luna` at `max` reasoning effort instead. Other tasks are unaffected,
-so a Claude task keeps running on the live account after the Gemini pool empties.
-If the quota cannot be read, the task stays on the live account and the script
-warns rather than guessing.
-
-`status.sh` marks a task on the second account with `@B` and a codex fallback
-task with `*` after the agent name; `review.sh` prints which account or model
-actually did the work.
-
-| Variable | Effect |
-|----------|--------|
-| `HERDR_SWARM_NO_FALLBACK=1` | Never fall back to codex; when no account has quota the task is not launched and the script reports when each account refills. |
-| `HERDR_SWARM_CODEX_MODEL` | Model the fallback runs, default `gpt-5.6-luna`. |
-| `HERDR_SWARM_CODEX_EFFORT` | Reasoning effort, default `max`. |
-| `HERDR_SWARM_CODEX_PLUGINS=1` | Keep codex plugins on. By default every swarm codex runs with `--disable plugins`, so plugins like caveman cannot rewrite how a worker or reviewer writes. `~/.codex/AGENTS.md` still loads. |
-
-Only the live account's quota can be read, because `/usage` answers for whoever
-`agy` is signed in as. The other account is therefore consulted only after the
-live one has actually run dry.
-
-On Windows, run `/usage` by hand as `MSYS_NO_PATHCONV=1 agy -p "/usage"`. Without
-that variable, Git Bash rewrites the leading slash into a file path and agy
-answers with prose instead of numbers.
-
-### Setting up the second account
-
-`agy` has no `--profile` or `--account` flag. Its OAuth token lives in Windows
-Credential Manager under one fixed target, `gemini:antigravity`, per Windows
-user. `scripts/agy-account.ps1` therefore keeps a *vault*: one extra credential
-entry per account, and it copies the wanted one into the live target before an
-agent starts. Both accounts then run as you, in an ordinary herdr pane with a
-real TUI; nothing about the launch differs between them.
-
-One-time setup, from your own profile, in a terminal:
-
-```powershell
-agy                       # /logout, then /login as the second subscription
-pwsh -NoProfile -File scripts/agy-account.ps1 -Mode save -Account b
-agy                       # /logout, then /login as your main subscription
-pwsh -NoProfile -File scripts/agy-account.ps1 -Mode save -Account a
-pwsh -NoProfile -File scripts/agy-account.ps1 -Mode list
+```bash
+pi install npm:pi-antigravity
+pi
+# In the Pi TUI: /login antigravity
 ```
 
-`list` prints, per entry, a truncated SHA-256 of the blob plus its size and
-write time. That is enough to see that the two accounts are actually different;
-the script never prints a credential. If the vault is empty, or `pwsh` is not
-installed, there is simply no second account and the swarm goes straight to the
-codex fallback when the live one empties.
+Use `/antigravity.models` to inspect available models and `/antigravity.usage`
+to see quota and reset times. Add another subscription with `/login antigravity`
+again, then inspect or change the active account with `/antigravity.accounts`.
+The provider retries the next linked account after a hard quota failure. The
+swarm does not read or swap credentials; if every linked account is exhausted,
+Pi reports the failure in its pane. Check `scripts/logs.sh <task-name>` and
+`scripts/status.sh` for that task. Use `/antigravity.doctor` in Pi for sanitized
+diagnostics.
 
-### Why accounts cannot be mixed
-
-`agy` refreshes its OAuth token during a session and writes the new one back to
-the live target. Measured on this machine: with twelve sessions running, the
-entry was rewritten twice inside thirty seconds. Two things follow.
-
-A running agent would clobber a credential swapped in underneath it, and would
-itself continue on the swapped-in account. So a switch is refused while any `agy`
-process is alive: `launch.sh` starts nothing and tells you to wait for the
-running agents to finish. (`agy-account.ps1 -Mode use -Force` overrides this;
-the swarm never passes it.)
-
-A vault entry goes stale as soon as its account has done work, so `use` first
-copies the live credential back over the outgoing account's own vault entry.
-Which account is live is tracked in `%LOCALAPPDATA%\herdr-swarm\live-account`,
-because after a refresh the blob no longer matches anything in the vault and the
-hash cannot answer the question.
-
-| Variable | Effect |
-|----------|--------|
-| `HERDR_SWARM_NO_SWITCHING=1` | Never switch accounts; go to codex (or stop, with `HERDR_SWARM_NO_FALLBACK=1`) when the live one is empty. |
+Tasks use `kind: "pi"`. `launch.sh` selects `--provider antigravity` and converts
+legacy runtime slugs such as `gemini-3.8-flash-high` into Pi's public model
+`gemini-3.8-flash` plus `--thinking high`. New task configs may use the public
+model and set `effort` to the thinking level. `kind: "agy"` is rejected with a
+migration message.
 
 ## Safety
 
-Agents run with `--yolo`, `--dangerously-skip-permissions` or
-`--dangerously-bypass-approvals-and-sandbox`, so every confirmation is disabled.
+Pi's tools run unattended. Gemini uses `--yolo`, and Codex uses
+`--dangerously-bypass-approvals-and-sandbox`.
 Worktree isolation keeps them off your checked-out files, but only point them at
 repos you are fine with an agent editing unattended, and never merge a branch you
 have not read the diff for — a verify pass and a critique pass are filters, not

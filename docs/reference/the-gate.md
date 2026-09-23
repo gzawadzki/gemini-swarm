@@ -135,8 +135,8 @@ A model grading its own output shares its own blind spots. When the task's
 `model` in `state.json` is the critique model, `critique.sh` reviews on
 `HERDR_SWARM_CRITIQUE_ALT_MODEL` instead (default `gemini-3.1-pro-high`, still on
 the Gemini pool). The verdict file records `worker_model` and `independent`. The
-one case this cannot avoid is a codex fallback task critiqued by codex while the
-Gemini pool is empty; the script warns and writes `"independent": false`. Tell
+one case this cannot avoid is a codex task critiqued by codex while the
+reviewer is also Codex; the script warns and writes `"independent": false`. Tell
 the user when that happens, and weigh that `pass` as the self-review it is.
 
 ### Plugins are off for every codex the swarm starts
@@ -161,7 +161,7 @@ to leave the prompt unchanged. `~/.codex/AGENTS.md` still loads. Set
 | `HERDR_SWARM_JEV_URL` | route default | endpoint override, primarily for a compatible gateway or tests |
 | `HERDR_SWARM_CRITIQUE_MODEL` | `gemini-3.8-flash-high` | the reviewer model |
 | `HERDR_SWARM_CRITIQUE_ALT_MODEL` | `gemini-3.1-pro-high` | used when the default would review its own work |
-| `HERDR_SWARM_CRITIQUE_KIND` | auto | force `agy`, `codex` or `gemini` |
+| `HERDR_SWARM_CRITIQUE_KIND` | auto | force `pi`, `codex` or `gemini` |
 | `HERDR_SWARM_CRITIQUE_EFFORT` | `medium` | reasoning effort |
 | `HERDR_SWARM_CRITIQUE_TIMEOUT` | `600` | seconds |
 | `HERDR_SWARM_CRITIQUE_DIFF_LINES` | `1500` | past this the diff in the brief is truncated and the reviewer is told to read the repo itself; the verdict records `"diff_truncated": true`, so a confident pass over a diff nobody saw in full is visible afterwards |

@@ -1,11 +1,11 @@
 ---
 name: herdr-gemini-swarm
-description: Orchestrate parallel Gemini CLI / Antigravity CLI (agy) sub-agents through herdr. Writes a task config, launches each task as an auto-approving background agent on its own git worktree and branch, routes work to a second Antigravity account when the first one's quota is empty and to codex when both are, then checks status, reads logs, runs a two-stage egress gate (tests plus Jev automatic acceptance or a generative critique), prepares the merge handoff, and cleans up agents, worktrees, branches and scratch state once the result is integrated or discarded. Use this when the user asks to run Gemini/Antigravity sub-agents, spin up a swarm of coding agents, or delegate parallel coding tasks through herdr.
+description: Route coding tasks between Pi Antigravity workers and Codex GPT-6 Luna xhigh, then orchestrate chosen agents through herdr worktrees, verification, critique, merge handoff, and cleanup. Use when the user asks to run Gemini/Antigravity sub-agents, choose between the swarm and Luna, spin up coding agents, or delegate work through herdr.
 ---
 
 # herdr Gemini/Antigravity swarm
 
-Runs one or more `gemini` / `agy` (Antigravity CLI) instances as background agents
+Runs `pi` Antigravity or `codex` Luna agents as background agents
 inside `herdr` panes, each on its own git worktree and branch, with auto-approve
 enabled. Gives you a way to check on them, read their output, and review their
 diff before anything lands on the user's branch.
@@ -14,17 +14,15 @@ This document is the flow. The detail behind each step lives in
 [`docs/reference/`](docs/reference/), and the vocabulary — task, slice, pitfall,
 brief, recon, gate, soundness, stray — is defined in [CONTEXT.md](CONTEXT.md).
 
-## Operating model: you orchestrate, the swarm executes
+## Operating model: route first, then execute
 
-The division of labour is the point. **You** — Claude, in this session — are the
-scarce, expensive reasoning: you decompose the goal, read the code, write the
-  task prompts, inspect results that are not automatically accepted, and decide
-  what merges. The **swarm** is the cheap,
-abundant execution running in parallel on the Antigravity Gemini pool.
+You decompose the goal, read the code, choose a worker, write task prompts,
+inspect results that are not automatically accepted, and decide what merges.
+Pi Antigravity handles bounded slices; Codex Luna holds the context for work
+whose correctness depends on several decisions staying together.
 
-- **Spend the swarm pool, not your attention.** Default tasks to Gemini models,
-  let deterministic scripts watch them — never poll an agent with your own tokens
-  — and let the two-stage gate bounce bad work before it reaches your eyes.
+- **Route each slice.** Use the gate in step 1 before setting `kind` in the task
+  config. Let deterministic scripts watch agents and run the two-stage review.
 - **Decompose for parallelism.** Throughput comes from fanning out, so prefer
   slices that touch disjoint files. When tasks genuinely depend on each other, run
   the upstream one, review and merge it, then launch the downstream one from the
@@ -56,11 +54,30 @@ delegated; a hallucinated pitfall enters a brief labelled as a verified fact.
 
 A unit of work belongs in the swarm only if you can describe it as a slice:
 roughly 15 minutes of agent time, a named list of files, one `verify` command,
-and the traps you found written down. Anything else stays with you, usually by
-being split until each part fits.
+and the traps you found written down. Split broad work before choosing a worker.
 
 **Reference:** [defining a task](docs/reference/task-definition.md) — the slice
 test, and why recon is enforced by the schema rather than asked for in prose.
+
+### 1a. Route each slice
+
+Apply the [worker gate](docs/reference/models-and-routing.md#worker-gate)
+after reading the code and before writing `tasks.json`. Record one sentence
+explaining each choice. An explicit user choice wins.
+
+- Choose `pi` / `gemini-3.8-flash-high` when the files, expected behavior,
+  pitfalls, and one verification command make the task self-contained. A
+  production file plus its test can still be one slice.
+- Choose `codex` / `gpt-6-luna` / `xhigh` when the work has a known scope but
+  requires one agent to resolve competing explanations or keep coupled behavior
+  consistent across modules. Use it for consequential auth, permission, schema,
+  or data-integrity changes unless the change is demonstrably mechanical.
+- When the files or acceptance check are unknown, finish recon first. If a Pi
+  task fails two review-fix rounds on the same issue, reroute its remaining work
+  to Luna with the failed checks and critique attached.
+
+Completion criterion: every candidate has a route and a checkable reason; every
+launched task has named files, pitfalls, and a verification command.
 
 ### 2. Write the task config
 
@@ -74,9 +91,7 @@ mechanism ([ADR 0002](docs/adr/0002-required-files-and-pitfalls.md)).
 field, and the rules for writing a prompt the reviewer can grade against.
 
 **Reference:** [models and routing](docs/reference/models-and-routing.md) —
-which `kind` and `model` to put on each task. The short answer is
-`gemini-3.8-flash-high` for almost everything
-([ADR 0003](docs/adr/0003-flash-high-is-the-default.md)).
+which `kind`, `model`, and `effort` to put on each task after the worker gate.
 
 ### 3. Launch
 
@@ -89,7 +104,7 @@ working directory**: two agents editing the same checked-out files in parallel
 corrupts both, and a branch alone does not fix it, because the working directory
 is still shared.
 
-For each task `launch.sh` picks an Antigravity account with quota, creates the
+For each task `launch.sh` creates the
 worktree, starts the agent, writes its brief to `~/.herdr/briefs/<name>.md`,
 sends a one-line pointer at that file, confirms the agent reacted, and records the
 task in `.herdr-swarm/state.json`. It also stamps the run's id, the config as
@@ -98,10 +113,7 @@ launched and the skill commit it ran on into `.herdr-swarm/run.json`.
 Launching confirms that the agent started and accepted the prompt. It confirms
 nothing about the work.
 
-**Reference:** [accounts and quota](docs/reference/accounts-and-quota.md) — what
-happens when a pool is empty, when the second account gets used, and when a task
-falls back to codex. Tell the user whenever any of those happened, or when a task
-never launched at all.
+**Reference:** [accounts and quota](docs/reference/accounts-and-quota.md) explains Pi's linked accounts and quota commands.
 
 ### 4. Watch
 
@@ -209,14 +221,14 @@ changes untouched.
 ### When something looks like success but is not
 
 That is most of the interesting failures here: a prompt the agent never saw, a
-quota read that failed open, a suite that passed against another checkout, a diff
+a suite that passed against another checkout, a diff
 that came out empty. Turn on `--trace` and work from the log.
 
 **Reference:** [traps, and how to see what actually happened](docs/reference/troubleshooting.md).
 
 ## Safety notes to apply, not just mention
 
-- `--yolo`, `--dangerously-skip-permissions` and
+- `--yolo`, Pi's unattended tool execution, and
   `--dangerously-bypass-approvals-and-sandbox` disable every confirmation,
   including destructive shell commands and file edits. The codex flag also
   disables its sandbox, which the swarm needs because agents write their result
@@ -235,11 +247,8 @@ that came out empty. Turn on `--trace` and work from the log.
 - A trim suggestion is not a finding. Never apply cuts without reading them, never
   let one remove validation, error handling or tests, and never run trim in place
   of the correctness review.
-- Report when a task fell back to codex, ran on the second account, or never
-  launched. The user picked a model for a reason, and a missing task is easy to
-  miss in a status table.
-- Never print an OAuth credential blob, and never pass `-Force` to
-  `agy-account.ps1 -Mode use` to get around its "agents are running" refusal: that
-  silently changes the account of a running agent and loses a token.
+- Report when a task never launched or Pi reports a quota failure. The user
+  picked a model for a reason, and a missing task is easy to miss.
+- Keep Pi's Antigravity auth and linked-account files private.
 - If `status.sh` shows `blocked` for longer than expected, a human is needed. That
   is not a reason to add more auto-approve flags.

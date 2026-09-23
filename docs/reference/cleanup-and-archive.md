@@ -47,7 +47,7 @@ nothing to compare runs against.
 
 ## Which agents get closed
 
-An agy agent that finished its task does not exit. It sits in its pane as an idle
+A Pi agent that finished its task does not exit. It sits in its pane as an idle
 process still holding the shared OAuth credential, so the next launch that needs
 the other account is refused with "accounts cannot be mixed" — true, but it reads
 like a quota problem rather than "your last swarm is still open".

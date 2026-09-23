@@ -2,7 +2,7 @@
   "tasks": [
     {
       "name": "rename-vars",
-      "kind": "agy",
+      "kind": "pi",
       "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/rename-vars",
@@ -17,7 +17,7 @@
     },
     {
       "name": "add-rate-limiter",
-      "kind": "agy",
+      "kind": "pi",
       "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/add-rate-limiter",
@@ -34,7 +34,7 @@
     },
     {
       "name": "session-fixation",
-      "kind": "agy",
+      "kind": "pi",
       "model": "claude-opus-4-6-thinking",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/session-fixation",

@@ -459,7 +459,7 @@ critique_kind=$(critique_kind_for "$reviewer_model")
 trace "$NAME" "reviewer.pick" "${critique_kind:-<none>} for model $reviewer_model"
 if [[ -z "$critique_kind" ]]; then
   echo "=== $NAME: critique SKIPPED ==="
-  echo "No agy, codex or gemini binary on PATH, so nothing can run the review." >&2
+  echo "No pi, codex or gemini binary on PATH, so nothing can run the review." >&2
   write_verdict "skipped" "no reviewer binary available"
   exit 0
 fi
@@ -473,9 +473,10 @@ autoflag=$(autoflag_for_kind "$critique_kind") || {
 cmd=()
 reviewer_label="$critique_kind"
 case "$critique_kind" in
-  agy)
-    cmd=(agy -p "$instruction" "$autoflag" --model "$reviewer_model")
-    reviewer_label="agy / $reviewer_model"
+  pi)
+    mapfile -t pi_args < <(pi_model_args "$reviewer_model")
+    cmd=(pi -p --no-session "$autoflag" "${pi_args[@]}" "$instruction")
+    reviewer_label="pi / $reviewer_model"
     ;;
   codex)
     # codex exec is the non-interactive mode. The trust override is the same one
@@ -502,8 +503,7 @@ esac
 echo "=== $NAME: critique ==="
 echo "reviewer:  $reviewer_label"
 if [[ -n "$worker_model" && "$reviewer_model" == "$worker_model" ]]; then
-  # Only reachable when the Gemini pool was empty and the codex fallback task is
-  # now being reviewed by codex too. Say so rather than pretend it is independent.
+  # A Codex task can be reviewed by the same Codex model. Report that clearly.
   echo "WARNING:   the reviewer is the same model that wrote this diff ($worker_model)."
   echo "           Weigh a pass accordingly; it is not an independent review."
   trace "$NAME" "reviewer.model" "not independent: reviewer and worker are both $worker_model"

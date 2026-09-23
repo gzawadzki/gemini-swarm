@@ -24,7 +24,7 @@ native() { cygpath -m "$1" 2>/dev/null || echo "$1"; }
 
 write_state() { # verify-cmd
   jq -n --arg wt "$WT" --arg cmd "$1" \
-    '[{name:"t1", kind:"agy", branch:"main", worktree_path:$wt, verify:$cmd}]' \
+    '[{name:"t1", kind:"pi", branch:"main", worktree_path:$wt, verify:$cmd}]' \
     > "$HERDR_SWARM_STATE_DIR/state.json"
   rm -f "$HERDR_SWARM_STATE_DIR/t1.verify.json"
 }
@@ -129,7 +129,7 @@ git -C "$WT" add -A >/dev/null 2>&1
 git -C "$WT" commit -qm init >/dev/null 2>&1
 base_sha=$(git -C "$WT" rev-parse HEAD)
 jq -n --arg wt "$WT" --arg sha "$base_sha" --arg cmd "true" \
-  '[{name:"t1", kind:"agy", branch:"main", base:$sha, base_sha:$sha,
+  '[{name:"t1", kind:"pi", branch:"main", base:$sha, base_sha:$sha,
      worktree_path:$wt, verify:$cmd}]' > "$HERDR_SWARM_STATE_DIR/state.json"
 rm -f "$HERDR_SWARM_STATE_DIR/t1.verify.json"
 export FAKE_PY_ORIGIN="$(native "$MAIN")/demo_pkg/__init__.py"

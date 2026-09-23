@@ -7,7 +7,7 @@
 set -uo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
-harness_fake agy codex curl
+harness_fake pi codex curl
 export HERDR_ENV=1
 unset TYPESAFE_API_KEY OPENROUTER_API_KEY
 
@@ -26,7 +26,7 @@ export HERDR_SWARM_STATE_DIR="$RUN/.herdr-swarm"; mkdir -p "$HERDR_SWARM_STATE_D
 
 write_state() { # worker-model [files-json] [pitfalls-json]
   jq -n --arg wt "$SRC" --arg sha "$base_sha" --arg model "$1" --argjson files "${2:-[]}" --argjson pitfalls "${3:-[]}" \
-    '[{name:"t1", kind:"agy", model:$model, branch:"main", base:$sha, base_sha:$sha,
+    '[{name:"t1", kind:"pi", model:$model, branch:"main", base:$sha, base_sha:$sha,
        worktree_path:$wt, files:$files, pitfalls:$pitfalls,
        prompt:"append world to file.txt"}]' > "$HERDR_SWARM_STATE_DIR/state.json"
   : > "$CALL_LOG"
@@ -44,7 +44,7 @@ echo "== 1. task written by the critique model: reviewed by the alternate =="
 write_state "gemini-3.8-flash-high"
 out=$(critique); rc=$?
 check  "exit code on pass" "0" "$rc"
-grepok "agy ran on the alternate model"  "--model gemini-3.1-pro-high" "$(cat "$CALL_LOG")"
+grepok "pi ran on the alternate model"  "--model gemini-3.1-pro --thinking high" "$(cat "$CALL_LOG")"
 check  "verdict records reviewer"  "gemini-3.1-pro-high"   "$(verdict .model)"
 check  "verdict records worker"    "gemini-3.8-flash-high" "$(verdict .worker_model)"
 check  "verdict is independent"    "true"                  "$(verdict .independent)"
@@ -53,7 +53,7 @@ echo
 echo "== 2. task written by another model: default critique model =="
 write_state "gemini-3.1-pro-high"
 out=$(critique)
-grepok "agy ran on the default model"    "--model gemini-3.8-flash-high" "$(cat "$CALL_LOG")"
+grepok "pi ran on the default model"    "--model gemini-3.8-flash --thinking high" "$(cat "$CALL_LOG")"
 check  "verdict records reviewer"  "gemini-3.8-flash-high" "$(verdict .model)"
 check  "verdict is independent"    "true"                  "$(verdict .independent)"
 
@@ -193,16 +193,16 @@ check  "examined count is the entries" "1" "$(verdict '.pitfalls_checked | lengt
 echo
 echo "== 5k. an unknown verdict keeps the reviewer's own word =="
 write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
-cat > "$BIN/agy" <<'FAKE'
+cat > "$BIN/pi" <<'FAKE'
 #!/usr/bin/env bash
-echo "agy $*" >> "$CALL_LOG"
+echo "pi $*" >> "$CALL_LOG"
 echo '{"verdict":"looks-fine","confidence":"high","issues":[],"summary":"s"}'
 FAKE
-chmod +x "$BIN/agy"
+chmod +x "$BIN/pi"
 out=$(critique)
 check  "normalised for the pipeline"  "unparseable" "$(verdict .verdict)"
 check  "the reviewer's word survives" "looks-fine"  "$(verdict .reviewer_verdict)"
-harness_fake agy
+harness_fake pi
 
 echo
 echo "== 5l. review.sh shows what the critique examined =="
@@ -225,7 +225,7 @@ check  "records automatic acceptance"  "true"         "$(verdict .auto_accepted)
 check  "records exact Jev model"        "jev-1.13.0"   "$(verdict .jev.model)"
 check  "records maximum risk"           "0.04"         "$(verdict .jev.risk_max)"
 grepok "prints automatic acceptance"    "AUTO-ACCEPTED" "$out"
-nogrep "does not start agy"             "^agy "        "$(cat "$CALL_LOG")"
+nogrep "does not start pi"             "^pi "        "$(cat "$CALL_LOG")"
 nogrep "API key is absent from argv"    "must-not-leak" "$(cat "$CALL_LOG")"
 grepok "request carries the task"       'append world'  "$(cat "$HERDR_SWARM_STATE_DIR/t1.critique.jev-request.json")"
 review_out=$( cd "$RUN" && bash "$REPO/scripts/review.sh" t1 2>&1 )
@@ -240,7 +240,7 @@ out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RESPONSE="$FAKE_JEV_RESPONSE" critique); rc=
 check  "generative verdict remains pass" "pass"  "$(verdict .verdict)"
 check  "does not auto-accept"             "false" "$(verdict .auto_accepted)"
 check  "records the high risk"            "0.91"  "$(verdict .jev.risk_max)"
-grepok "agy reviewer ran"                 "^agy " "$(cat "$CALL_LOG")"
+grepok "pi reviewer ran"                 "^pi " "$(cat "$CALL_LOG")"
 
 echo
 echo "== 6c. Jev failure falls back without wedging the gate =="
@@ -250,7 +250,7 @@ out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RC=7 critique); rc=$?
 check  "fallback exit code"       "0"     "$rc"
 check  "not auto-accepted"        "false" "$(verdict .auto_accepted)"
 check  "Jev attempt is recorded"  "true"  "$(verdict .jev.attempted)"
-grepok "agy reviewer ran"         "^agy " "$(cat "$CALL_LOG")"
+grepok "pi reviewer ran"         "^pi " "$(cat "$CALL_LOG")"
 
 echo
 echo "== 6d. a stray file prevents automatic acceptance =="
@@ -259,7 +259,7 @@ verify_pass
 out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RESPONSE="$FAKE_JEV_RESPONSE" critique); rc=$?
 check  "not auto-accepted" "false" "$(verdict .auto_accepted)"
 nogrep "Jev was not called" "^curl " "$(cat "$CALL_LOG")"
-grepok "agy reviewer ran"   "^agy "  "$(cat "$CALL_LOG")"
+grepok "pi reviewer ran"   "^pi "  "$(cat "$CALL_LOG")"
 
 echo
 echo "== 6e. OpenRouter uses its Decisions endpoint and model name =="
@@ -282,7 +282,7 @@ verify_pass
 out=$(TYPESAFE_API_KEY='k' FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
 check  "not auto-accepted" "false" "$(verdict .auto_accepted)"
 nogrep "Jev was not called" "^curl " "$(cat "$CALL_LOG")"
-grepok "agy reviewer ran"   "^agy "  "$(cat "$CALL_LOG")"
+grepok "pi reviewer ran"   "^pi "  "$(cat "$CALL_LOG")"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

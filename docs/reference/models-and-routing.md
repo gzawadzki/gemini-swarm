@@ -1,77 +1,80 @@
 # Reference: agent kinds, models and routing
 
-Which binary runs a task, which model it runs on, and why the answer is almost
-always a Gemini Flash slug.
+## Agent kinds
 
-## The three agent kinds
+| kind | binary | launch flags | use |
+|------|--------|--------------|-----|
+| `pi` | `pi` plus `pi-antigravity` | `--approve --provider antigravity` | Default Antigravity worker and reviewer. Pi tools run unattended. |
+| `gemini` | `gemini` | `--yolo` | Classic Gemini CLI when explicitly requested. |
+| `codex` | `codex` | `--dangerously-bypass-approvals-and-sandbox` | OpenAI Codex CLI for the Luna route or an explicit user choice. |
 
-| kind | binary | auto-approve flag | notes |
-|------|--------|-------------------|-------|
-| `gemini` | `gemini` | `--yolo` (or `--approval-mode yolo`) | Classic Gemini CLI. Google sunset this for Free/Pro/Ultra users on 2026-06-18 in favour of Antigravity CLI, so it may not be installed. Check `command -v gemini` before assuming it exists. |
-| `agy` | `agy` | `--dangerously-skip-permissions` | Antigravity CLI, the successor. That is the flag name Google ships; treat it as seriously as it sounds. |
-| `codex` | `codex` | `--dangerously-bypass-approvals-and-sandbox` | OpenAI Codex CLI. Used when the user asks for it by name, and as the last-resort fallback once both Antigravity accounts are empty. See [accounts and quota](accounts-and-quota.md). |
+Herdr supports all three kinds. `kind: "agy"` is rejected; update configs to
+`kind: "pi"`. Install the Pi provider with `pi install npm:pi-antigravity`,
+then sign in with `/login antigravity` inside Pi.
 
-All three are valid `--kind` values for `herdr agent start`, so no manual pane
-handling is needed. If the user says "Gemini" but only `agy` is installed, ask
-once which they mean rather than silently swapping binaries.
+## Worker gate
 
-## The model menu
+Apply this after reading the code and before writing `tasks.json`. State the
+route and one piece of evidence from the code for each candidate task. A model
+or harness the user chose explicitly takes precedence.
 
-`agy` exposes several models through `--model`, each with a real cost, speed and
-quality tradeoff. Classic `gemini` has no model menu, so `model` and `effort`
-apply to `kind: "agy"` and `kind: "codex"` only; `launch.sh` warns and ignores
-them on a `gemini` task.
+1. **Finish recon first.** Locate the affected code and callers, name expected
+   files and pitfalls, and identify a command that can verify the result. A
+   vague task is not a reason to start a worker.
+2. **Use Pi Antigravity** for a self-contained slice: the desired behavior is
+   clear, the implementation follows an existing pattern, the files are
+   bounded, and one check can expose a wrong result. Prefer
+   `kind: "pi"`, `model: "gemini-3.8-flash-high"`.
+3. **Use Luna 6 xhigh** when the task is scoped but its correctness depends on
+   comparing plausible causes, changing a shared contract across modules, or
+   preserving coupled behavior through implementation and tests. Consequential
+   auth, permission, schema, and data-integrity changes take this route unless
+   recon shows a mechanical change with a decisive check. Set
+   `kind: "codex"`, `model: "gpt-6-luna"`, `effort: "xhigh"`.
+4. **Split when possible.** If only one decision is hard, give that coherent
+   part to Luna and route the independent, specified follow-up slices to Pi.
+   After two review-fix rounds fail on the same Pi task, send its remaining work
+   to Luna with the diff, test failure, and critique attached.
 
-Most agy slugs bake the reasoning effort into the name, so
-`gemini-3.8-flash-low` and `gemini-3.8-flash-high` are separate slugs. A
-`--effort` flag (`low|medium|high`) exists as well. Confirmed with Antigravity
-CLI 1.1.27:
+Both routes use their own Herdr worktree and the same verify and critique gate.
+Do not pick Luna just because an implementation changes two files, or pick Pi
+because a prompt can be made short. The test is whether the worker has enough
+evidence to finish the task without making a new design decision.
 
-| Model slug | Use it for |
-|------------|------------|
-| `gemini-3.8-flash-low`, `-medium`, `-high` | Cheap and fast. Formatting, boilerplate, mechanical fixes, and — at `-high` — most ordinary work. Newest Flash generation; prefer it over the 3.7 and 3.6 slugs. |
-| `gemini-3.1-pro-low`, `gemini-3.1-pro-high` | 1M context, steady on big repos. The step up when a task genuinely needs more context, or when flash-high already produced a bad diff for it. |
-| `claude-sonnet-4-6` | Step-by-step reasoning without Opus pricing. Draws on the scarce pool. |
-| `claude-opus-4-6-thinking` | The heaviest model here. Security review, nasty bugs, architecture. Expensive, and on the scarce pool. |
-| `gpt-oss-120b-medium` | Open-weight, 400K context, generally below Gemini Pro and Opus at coding. A second opinion, rarely a first pick. |
+For example, updating one parser and its existing tests after identifying the
+format rule goes to Pi. A session bug that could originate in cookies, token
+refresh, or middleware order goes to Luna for one coherent diagnosis and fix.
 
-Older slugs (`gemini-3.7-flash-*`, `gemini-3.6-flash-*`) still work. Google adds
-a Flash generation faster than this file gets updated, so run `agy models` on the
-target machine: if it shows a higher number than this table does, trust `agy
-models`.
+[OpenAI's model guidance](https://developers.openai.com/api/docs/guides/model-selection)
+describes Luna at extra-high effort for problems with clear constraints. The
+rules above are this repository's routing policy, not a model guarantee.
 
-## Routing: default to the Gemini pool
+## Models
 
-Antigravity meters two pools separately. **Gemini Models** is the large one the
-user pays for; **Claude and GPT models** is scarce. Routing swarm work into the
-scarce pool drains it fast and duplicates reasoning the orchestrator already
-provides, so the default is:
+Pi exposes public Antigravity model IDs. Inspect the current account with
+`/antigravity.models` in Pi. Task configs can use the public ID and `effort`
+(`low`, `medium`, or `high`), for example:
 
-1. Mechanical, low-risk, well-defined → `gemini-3.8-flash-medium`.
-2. **Everything else** — ordinary features, bugfixes, refactors, reviews →
-   `gemini-3.8-flash-high`. This is the default for almost every task.
-3. `gemini-3.1-pro-high` when the task needs the bigger context, or when
-   flash-high already produced a bad diff for it once. Both are on the Gemini
-   pool, so this costs nothing scarce.
-4. A `claude-*` or `gpt-*` slug **only when the user names it**, or when a task
-   genuinely failed on Gemini Pro twice. Say so when you do, because it spends
-   the scarce pool.
+```json
+{"kind":"pi","model":"gemini-3.8-flash","effort":"high"}
+```
 
-The measurement behind step 2 is in
-[ADR 0003](../adr/0003-flash-high-is-the-default.md): a four-part ticket
-(per-country seed offsets, CLI help derived from a profile cycle, comment
-translation, golden tests off limits) landed on flash-high in 9.5 minutes with
-zero bounces, because the task named the traps up front. A well-specified slice
-does not need Pro, and a vague one is not rescued by it. Sharpening the task is
-the cheaper move than upgrading the model — see
-[defining a task](task-definition.md).
+For existing configs, `launch.sh` converts `gemini-3.8-flash-high` to
+`--model gemini-3.8-flash --thinking high`, `gemini-3.1-pro-high` to
+`gemini-3.1-pro` with high thinking, and `claude-opus-4-6-thinking` to
+`claude-opus-4-6` with high thinking. An explicit `effort` overrides the
+suffix. Pi tasks with no model use `gemini-3.8-flash` at high thinking.
 
-If the user names a model outright, use it and skip the heuristic.
+Within the Pi route, use Flash for ordinary scoped work and Pro when the task
+needs more context.
+Claude and GPT models use the scarcer Antigravity quota group. The user may
+choose any model their account offers. See [ADR 0003](../adr/0003-flash-high-is-the-default.md)
+for the Flash default.
 
-## The critique reviewer
+## Reviewer
 
-`critique.sh` first uses Jev for typed risk scoring when a TypeSafe or OpenRouter
-key is available and the diff satisfies the automatic-acceptance preconditions.
-Anything Jev cannot clear falls through to `gemini-3.8-flash-high`, which swaps
-to `gemini-3.1-pro-high` when that would mean a model reviewing its own output.
-The full rules are in [the gate](the-gate.md#stage-2-critique-the-judgement-half).
+`critique.sh` first tries Jev automatic acceptance when its preconditions and
+credentials are present. Other diffs are reviewed through Pi on the
+Antigravity provider. It selects `gemini-3.1-pro-high` when the worker used
+the default `gemini-3.8-flash-high`, avoiding the same model reviewing itself.
+Pi runs the review in print mode with an ephemeral session.

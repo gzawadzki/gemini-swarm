@@ -17,16 +17,17 @@
 # error message that looked blank. The per-field calls are the safe shape.
 
 # --- Trace -------------------------------------------------------------------
+
+SWARM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #
 # Off by default. Turned on with --trace on any script, or HERDR_SWARM_TRACE=1
 # for a whole session. Every external call the swarm makes gets one line in
 # $STATE_DIR/trace.log: what was run, against which task, and what it returned.
 #
 # This exists because the interesting failures here are not exceptions. A prompt
-# that herdr accepts and the agent never sees, a quota read that silently fails
-# open, a base ref that resolves to the branch tip and makes the diff look empty
-# — all of those look like success from the outside. The trace is where you find
-# out which one happened.
+# that herdr accepts and the agent never sees, or a base ref that resolves to
+# the branch tip and makes the diff look empty, can look like success from the
+# outside. The trace is where you find out which one happened.
 #
 # The log goes in the state dir, never in a worktree: writing into a worktree
 # would flip its CLEAN column to DIRTY and break the review gate.
@@ -177,7 +178,7 @@ submit_prompt() {
 }
 
 # Close an agent's TUI and wait until herdr no longer knows it.
-# herdr has no `agent stop`, so the only way out of an agy session is the
+# herdr has no `agent stop`, so the way out of an interactive session is the
 # interrupt the TUI itself listens for. Two details are load-bearing: the key
 # name is "ctrl+c" ("ctrl-c" comes back as "unsupported key"), and both presses
 # must go in one send-keys call. Sent as two calls with a sleep between them the
@@ -249,270 +250,39 @@ resolve_base_ref() {
 autoflag_for_kind() {
   case "$1" in
     gemini) echo "--yolo" ;;
-    agy)    echo "--dangerously-skip-permissions" ;;
+    pi)     echo "--approve" ;;
     codex)  echo "--dangerously-bypass-approvals-and-sandbox" ;;
-    *)      echo "ERROR: unsupported kind '$1' (expected 'gemini', 'agy' or 'codex')" >&2; return 1 ;;
+    *)      echo "ERROR: unsupported kind '$1' (expected 'gemini', 'pi' or 'codex')" >&2; return 1 ;;
   esac
 }
 
-# --- Antigravity quota, account switching, and the codex fallback -----------
-#
-# `agy -p "/usage"` is the only machine-readable quota source. There is no
-# `agy usage` subcommand, and the slash command only expands in print mode.
-# It prints tab-separated rows:
-#
-#   Gemini Models<TAB>Weekly Limit Remaining<TAB>80%<TAB>2026-09-04T00:18:35Z
-#   Gemini Models<TAB>Five Hour Limit Remaining<TAB>22%<TAB>2026-08-28T12:31:35Z
-#   Claude and GPT models<TAB>Weekly Limit Remaining<TAB>94%<TAB>...
-#   Claude and GPT models<TAB>Five Hour Limit Remaining<TAB>82%<TAB>...
-#
-# MSYS_NO_PATHCONV=1 is not optional on Windows. Without it, Git Bash rewrites
-# the leading slash and agy receives "C:/Program Files/Git/usage", which it
-# treats as an ordinary prompt about a file path. The call then burns a model
-# turn and returns prose instead of quota numbers.
-#
-# Both accounts run as you, in an ordinary herdr pane with a full TUI. agy has
-# no account flag, so scripts/agy-account.ps1 swaps the OAuth credential in
-# Windows Credential Manager instead: one live entry that agy reads, plus a
-# vault entry per account. Two properties of that arrangement shape everything
-# below.
-#
-# Only the live account's quota can be read. Asking about the other one means
-# making it live first, which changes the machine, so it is done only once the
-# live account has actually run dry.
-#
-# Accounts cannot be mixed. agy refreshes its token mid-session and writes it
-# back to the live entry, so a running agent would overwrite a credential
-# swapped in underneath it, and would itself change account. When a switch is
-# needed while agents are still running, the swarm launches nothing and says so.
-#
-# Codex is the last resort, not the first: a task only falls back to it once
-# both accounts are empty for its pool, or when switching is switched off.
-# HERDR_SWARM_NO_FALLBACK=1 turns that off too, and then nothing is launched.
-
-SWARM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Windows-form path, because pwsh is a native binary and does not read /d/... .
-SWARM_ACCOUNT_SCRIPT="$SWARM_LIB_DIR/agy-account.ps1"
-if command -v cygpath >/dev/null 2>&1; then
-  SWARM_ACCOUNT_SCRIPT=$(cygpath -w "$SWARM_ACCOUNT_SCRIPT")
-fi
-
-# Where agy-account.ps1 records which account the live credential belongs to.
-# After a token refresh the blob matches no vault entry, so this file is the
-# only thing that knows.
-swarm_state_dir() {
-  local d="${LOCALAPPDATA:-}"
-  [[ -n "$d" ]] || return 1
-  printf '%s/herdr-swarm' "$(printf '%s' "$d" | tr '\\' '/')"
-}
-
-# The account the live credential belongs to: "a", "b", or nothing at all when
-# the vault has never been set up.
-account_live() {
-  [[ "${HERDR_SWARM_NO_SWITCHING:-0}" == "1" ]] && return 1
-  command -v pwsh >/dev/null 2>&1 || return 1
-  local dir state
-  dir=$(swarm_state_dir) || return 1
-  state="$dir/live-account"
-  [[ -f "$state" ]] || return 1
-  tr -d ' \r\n' < "$state"
-}
-
-account_other() { [[ "${1:-a}" == "a" ]] && echo "b" || echo "a"; }
-
-# Does the vault hold a credential for account $1? Read once per run: it costs
-# a pwsh start, and the answer cannot change while the swarm is launching.
-SWARM_ACCOUNT_LIST_CACHE="${TMPDIR:-/tmp}/herdr-swarm-accounts.$$"
-account_vault_has() {
-  local acct="${1:-}"
-  if [[ ! -s "$SWARM_ACCOUNT_LIST_CACHE" ]]; then
-    command -v pwsh >/dev/null 2>&1 || return 1
-    MSYS_NO_PATHCONV=1 timeout 60 pwsh -NoProfile -File "$SWARM_ACCOUNT_SCRIPT" -Mode list \
-      > "$SWARM_ACCOUNT_LIST_CACHE" 2>/dev/null || return 1
-  fi
-  grep -q "^vault $acct .*(empty)" "$SWARM_ACCOUNT_LIST_CACHE" && return 1
-  grep -q "^vault $acct " "$SWARM_ACCOUNT_LIST_CACHE"
-}
-
-# Is the swarm allowed to change accounts at all? The opt-out has to gate the
-# swap itself, not just the lookup: account_live falling back to "a" when
-# switching is off would otherwise still let a swap through.
-account_switching_enabled() { [[ "${HERDR_SWARM_NO_SWITCHING:-0}" != "1" ]]; }
-
-# Make account $1 live. Exit codes come straight from agy-account.ps1:
-# 0 done, 3 agents are running so accounts would mix, 4 vault entry empty,
-# 5 no record of which account is live.
-account_switch() {
-  local acct="${1:-}" out rc=0
-  account_switching_enabled || return 6
-  out=$(MSYS_NO_PATHCONV=1 timeout 60 pwsh -NoProfile -File "$SWARM_ACCOUNT_SCRIPT" \
-    -Mode use -Account "$acct" 2>&1) || rc=$?
-  [[ -n "$out" ]] && echo "$out" >&2
-  return "$rc"
-}
-
-AGY_USAGE_CACHE_PREFIX="${TMPDIR:-/tmp}/herdr-swarm-agy-usage.$$"
-trap 'rm -f "$AGY_USAGE_CACHE_PREFIX".* "$SWARM_ACCOUNT_LIST_CACHE"' EXIT
-
-# Print the raw /usage table for one account, fetching it at most once per run.
-# $1 names the account the numbers belong to, so that a table read before a
-# switch is not reused after one. Only the live account can actually be asked.
-agy_usage() {
-  local acct="${1:-a}" cache="$AGY_USAGE_CACHE_PREFIX.${1:-a}" live rc=0
-  if [[ -s "$cache" ]]; then cat "$cache"; return 0; fi
-  # With no state file the live account is unknown, and the rest of the code
-  # assumes "a" in that case. Assume it here too: without this, /usage answers
-  # for whoever is signed in and the numbers get filed under the account that
-  # was asked about, so a report can claim account B is empty when there is no
-  # account B at all.
-  live=$(account_live) || live="a"
-  [[ "$live" == "$acct" ]] || return 1
-  if ! command -v agy >/dev/null 2>&1; then
-    trace "-" "quota.read" "no agy on PATH"
-    return 1
-  fi
-  MSYS_NO_PATHCONV=1 timeout 120 agy -p "/usage" 2>/dev/null > "$cache" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    trace "-" "quota.read" "account $acct: agy -p /usage -> rc=$rc"
-    rm -f "$cache"
-    return 1
-  fi
-  # A reply with no percentages is agy answering in prose, which is what a
-  # mangled slash command looks like. Worth distinguishing in the log.
-  if ! grep -qE '[0-9]+%' "$cache"; then
-    trace "-" "quota.read" "account $acct: agy -p /usage -> rc=0 but no percentages in the reply"
-    rm -f "$cache"
-    return 1
-  fi
-  # Guarded with `if` rather than `&&`: a bare `cond && cmd` statement is the
-  # last command in the function when the trace is off, so `set -e` in the
-  # caller would take the whole script down on the false branch.
-  if trace_enabled; then
-    trace "-" "quota.read" \
-      "account $acct: agy -p /usage -> rc=0 ($(grep -oE '[0-9]+%' "$cache" | tr '\n' ' '))"
-  fi
-  cat "$cache"
-}
-
-# Which quota pool a model draws from. The two pools run down separately, so a
-# claude task keeps working after the gemini pool empties.
-agy_family_for_model() {
-  case "${1:-}" in
-    claude-*|gpt-*) echo "Claude and GPT models" ;;
-    *)              echo "Gemini Models" ;;
+# Pi's Antigravity provider exposes a public model ID and a separate thinking
+# level. Older Antigravity CLI slugs encode that level in the model name.
+pi_model_args() {
+  local model="${1:-gemini-3.8-flash-high}" thinking="${2:-}"
+  case "$model" in
+    gemini-*-low|gemini-*-medium|gemini-*-high)
+      [[ -n "$thinking" ]] || thinking="${model##*-}"
+      model="${model%-*}" ;;
+    claude-*-thinking)
+      [[ -n "$thinking" ]] || thinking=high
+      model="${model%-thinking}" ;;
+    gpt-oss-*-medium)
+      [[ -n "$thinking" ]] || thinking=medium
+      model="${model%-medium}" ;;
   esac
+  printf '%s\n' --provider antigravity --model "$model"
+  [[ -n "$thinking" ]] && printf '%s\n' --thinking "$thinking"
+  return 0
 }
 
-# Lowest remaining percentage across a family's windows, for one account.
-# Weekly and five-hour both gate a launch, so the smaller number is the one that
-# matters. $1: family, $2: account.
-agy_family_remaining() {
-  local family="$1" acct="${2:-a}" usage
-  usage=$(agy_usage "$acct") || return 1
-  awk -F'\t' -v fam="$family" '
-    $1 == fam {
-      pct = $3; sub(/%/, "", pct); pct += 0
-      if (min == "" || pct < min) min = pct
-    }
-    END { if (min == "") exit 1; print min }
-  ' <<<"$usage"
-}
-
-# When the empty window of a family refills again, as printed by agy (UTC).
-# Only rows that actually read 0% are considered; the earliest one is the answer.
-agy_family_reset() {
-  local family="$1" acct="${2:-a}" usage
-  usage=$(agy_usage "$acct") || return 1
-  awk -F'\t' -v fam="$family" '
-    $1 == fam {
-      pct = $3; sub(/%/, "", pct); pct += 0
-      if (pct == 0 && $4 != "" && (first == "" || $4 < first)) first = $4
-    }
-    END { if (first == "") exit 1; print first }
-  ' <<<"$usage"
-}
-
-# Is this model out of quota on this account? 0 = yes, 1 = no, 2 = could not tell.
-# A task with no model set runs on whatever agy defaults to, which the CLI does
-# not report, so treat either pool being empty as a stop.
-agy_exhausted() {
-  local model="${1:-}" acct="${2:-a}" fam rem
-  if [[ -z "$model" ]]; then
-    for fam in "Gemini Models" "Claude and GPT models"; do
-      rem=$(agy_family_remaining "$fam" "$acct") || return 2
-      [[ "$rem" -eq 0 ]] && return 0
-    done
-    return 1
-  fi
-  fam=$(agy_family_for_model "$model")
-  rem=$(agy_family_remaining "$fam" "$acct") || return 2
-  [[ "$rem" -eq 0 ]]
-}
-
-# Which account should run a task on this model, switching to the other one if
-# the live one has run dry? Prints the account and returns 0. Otherwise:
-#   1  both accounts are empty, or there is no second account to fall back to
-#   2  the quota could not be read; the printed account is a guess, so the
-#      caller should warn and carry on rather than refuse to launch
-#   3  a switch is needed but agents are still running, so nothing may start
-#   4  a switch is needed but HERDR_SWARM_NO_SWITCHING=1 forbids it
-agy_pick_account() {
-  local model="${1:-}" live other rc=0 src=0
-  live=$(account_live) || live="a"
-
-  agy_exhausted "$model" "$live" || rc=$?
-  case "$rc" in
-    1) echo "$live"; return 0 ;;
-    2) echo "$live"; return 2 ;;
-  esac
-
-  account_switching_enabled || return 4
-
-  other=$(account_other "$live")
-  account_vault_has "$other" || return 1
-
-  account_switch "$other" || src=$?
-  case "$src" in
-    0) ;;
-    3) return 3 ;;
-    *) return 1 ;;
-  esac
-
-  rc=0
-  agy_exhausted "$model" "$other" || rc=$?
-  case "$rc" in
-    1) echo "$other"; return 0 ;;
-    2) echo "$other"; return 2 ;;
-  esac
-  # Both empty. The other account stays live: switching back costs a second
-  # swap, and nothing is being launched either way.
-  return 1
-}
-
-# Human-readable "when does this get better", for the stop-and-report message.
-# Only an account whose usage table was already fetched can answer; asking the
-# other one would mean another switch.
-agy_reset_note() {
-  local model="${1:-}" fam note="" acct reset upper
-  fam=$(agy_family_for_model "$model")
-  for acct in a b; do
-    reset=$(agy_family_reset "$fam" "$acct" 2>/dev/null || true)
-    [[ -n "$reset" ]] || continue
-    upper=$(printf '%s' "$acct" | tr 'ab' 'AB')
-    [[ -n "$note" ]] && note="$note, "
-    note="${note}account $upper refills at $reset"
-  done
-  [[ -n "$note" ]] || note="agy did not report a reset time"
-  printf '%s' "$note"
-}
-
-# Lifecycle state of a task. Both accounts now run in a herdr pane, so herdr's
-# own output scraping is the single source of truth. $1: task name.
+# Lifecycle state of a task. Herdr's output scraping is the source of truth.
+# $1: task name.
 task_state() {
   agent_state "$1"
 }
 
-# Model and effort the fallback runs on.
+# Model and effort for explicit Codex tasks and reviews.
 CODEX_FALLBACK_MODEL="${HERDR_SWARM_CODEX_MODEL:-gpt-5.6-luna}"
 CODEX_FALLBACK_EFFORT="${HERDR_SWARM_CODEX_EFFORT:-max}"
 
@@ -854,20 +624,15 @@ critique_file_for() {
   printf '%s/%s.critique.json' "${HERDR_SWARM_STATE_DIR:-.herdr-swarm}" "$1"
 }
 
-# Which binary runs the critique. Prefers agy on the Gemini pool, drops to codex
-# when that pool is empty, and to classic gemini when agy is not installed.
+# Which binary runs the critique. Prefer Pi with the Antigravity provider,
+# then Codex and classic Gemini when Pi is not installed.
 # Prints nothing when no usable binary exists.
 critique_kind_for() {
   local model="$1"
   if [[ -n "${HERDR_SWARM_CRITIQUE_KIND:-}" ]]; then
     printf '%s' "$HERDR_SWARM_CRITIQUE_KIND"; return
   fi
-  if command -v agy >/dev/null 2>&1; then
-    # agy_exhausted returns 2 when the quota cannot be read; only a definite 0%
-    # should push the critique onto another pool.
-    # Only the live account's quota can be read, so ask about that one.
-    if ! agy_exhausted "$model" "$(account_live || echo a)"; then printf 'agy'; return; fi
-  fi
+  command -v pi >/dev/null 2>&1 && { printf 'pi'; return; }
   command -v codex  >/dev/null 2>&1 && { printf 'codex';  return; }
   command -v gemini >/dev/null 2>&1 && { printf 'gemini'; return; }
 }

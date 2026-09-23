@@ -70,9 +70,7 @@ post-mortem needs.
 
 ## The plumbing
 
-**Account** — one of two Antigravity subscriptions, selected by swapping the
-credential `agy` reads at start-up. Marked `@B` in `status.sh` when a task ran on
-the second one; `*` means it fell back to codex because both were empty.
+**Account** — a Google subscription linked through Pi's `pi-antigravity` provider. The provider chooses an account for requests and retries another linked account on a hard quota failure.
 
 **Pool** — a metered Antigravity quota bucket. "Gemini Models" is the large one
 the swarm is supposed to spend; "Claude and GPT models" is the scarce one.

@@ -36,8 +36,11 @@ All four, not three:
    list is allowed; an unread empty list is the failure this whole mechanism
    exists to stop.
 
-Work that cannot be described that way stays with you. Splitting it until each
-part can is the usual answer; keeping it is the other.
+Split work that fails the slice test when independent parts can be specified.
+For a scoped change whose coupled decisions need one worker, use
+`kind: "codex"`, `model: "gpt-6-luna"`, and `effort: "xhigh"` through the same
+Herdr pipeline. The [worker gate](models-and-routing.md#worker-gate) makes that
+choice after recon; both routes still need named files, pitfalls, and a check.
 
 ## Schema
 
@@ -49,7 +52,7 @@ The scripts depend on this schema, so do not invent another one.
   "tasks": [
     {
       "name": "add-rate-limiter",
-      "kind": "agy",
+      "kind": "pi",
       "model": "gemini-3.8-flash-high",
       "repo": "/absolute/path/to/repo",
       "branch": "agent/add-rate-limiter",
@@ -71,7 +74,7 @@ The scripts depend on this schema, so do not invent another one.
 
 - `name` — unique, lowercase, matching `[a-z][a-z0-9_-]{0,31}`, which is herdr's
   agent-name rule.
-- `kind` — `gemini`, `agy` or `codex`. Which binary each one is, and what it is
+- `kind` — `gemini`, `pi` or `codex`. Which binary each one is, and what it is
   good for, is in [models and routing](models-and-routing.md).
 - `repo` — absolute path to the main repository. `launch.sh` creates a worktree
   from it, so the agent never touches this path directly.
@@ -106,8 +109,9 @@ it still launch.
 - `branch` — the task's branch, `agent/<name>` by default. It branches from the
   repo's current `HEAD` unless `base` is set.
 - `base` — an explicit base ref instead of `HEAD`.
-- `model`, `effort` — apply to `agy` and `codex`, not to `gemini`. Most agy slugs
-  already encode the effort, so `effort` is usually unnecessary there; for codex
+- `model`, `effort` — apply to `pi` and `codex`, not to `gemini`. Pi separates the
+  public model ID and thinking level. Legacy Antigravity slugs such as
+  `gemini-3.8-flash-high` are converted automatically. For codex
   it becomes `-c model_reasoning_effort="<effort>"`. Which slug to pick is in
   [models and routing](models-and-routing.md); the default follows
   [ADR 0003](../adr/0003-flash-high-is-the-default.md).

@@ -146,7 +146,7 @@ instruction="Read the overengineering brief at ${brief_arg} and follow it exactl
 trim_kind="${HERDR_SWARM_TRIM_KIND:-$(critique_kind_for "$model")}"
 trace "$NAME" "reviewer.pick" "${trim_kind:-<none>} for model $model"
 if [[ -z "$trim_kind" ]]; then
-  echo "=== $NAME: trim SKIPPED === no agy, codex or gemini binary on PATH." >&2
+  echo "=== $NAME: trim SKIPPED === no pi, codex or gemini binary on PATH." >&2
   write_trim "skipped" "no reviewer binary available"
   exit 0
 fi
@@ -157,8 +157,9 @@ autoflag=$(autoflag_for_kind "$trim_kind") || {
 }
 
 case "$trim_kind" in
-  agy)
-    cmd=(agy -p "$instruction" "$autoflag" --model "$model") ;;
+  pi)
+    mapfile -t pi_args < <(pi_model_args "$model")
+    cmd=(pi -p --no-session "$autoflag" "${pi_args[@]}" "$instruction") ;;
   codex)
     model="$CODEX_FALLBACK_MODEL"
     mapfile -t plugin_args < <(codex_swarm_args)

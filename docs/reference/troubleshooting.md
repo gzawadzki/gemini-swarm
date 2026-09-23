@@ -1,8 +1,8 @@
 # Reference: traps, and how to see what actually happened
 
 The interesting failures here are not exceptions. A prompt herdr accepted that
-the agent never saw, a quota read that failed open, a base ref that resolved to
-the branch tip — all of those look like success from the outside. This file is
+the agent never saw, or a base ref that resolved to the branch tip, can look
+like success from the outside. This file is
 the list of the ones that have actually happened, and the tool for finding the
 next one.
 
@@ -28,8 +28,7 @@ long, and note that [the run archive](cleanup-and-archive.md#the-archive-comes-f
 keeps a copy of it.
 
 ```
-2026-09-09T00:02:31Z critiq  demo    quota.read     agy -p /usage -> rc=0 (80% 42% )
-2026-09-09T00:02:31Z critiq  demo    reviewer.pick  agy for model gemini-3.8-flash-high
+2026-09-09T00:02:31Z critiq  demo    reviewer.pick  pi for model gemini-3.8-flash-high
 2026-09-09T00:02:32Z critiq  demo    verdict.parse  revise (1 issues, confidence high)
 ```
 
@@ -39,11 +38,11 @@ the event belongs to the run rather than one task.
 
 | script | events |
 |--------|--------|
-| `launch` | `run.start`, `run.meta`, `skill.state`, `recon.accept` / `recon.reject`, `quota.check`, `kind.resolve`, `timeout.clamp`, `base.pin`, `herdr.exec`, `worktree.ready`, `agent.start`, `agent.ready`, `prompt.submit` / `prompt.landed` / `prompt.stalled` / `prompt.lost`, `rollback`, `state.write`, `run.end` |
+| `launch` | `run.start`, `run.meta`, `skill.state`, `recon.accept` / `recon.reject`, `kind.resolve`, `timeout.clamp`, `base.pin`, `herdr.exec`, `worktree.ready`, `agent.start`, `agent.ready`, `prompt.submit` / `prompt.landed` / `prompt.stalled` / `prompt.lost`, `rollback`, `state.write`, `run.end` |
 | `status` | `poll`, one compact line per task, and `scope.read` |
 | `verify` | `cmd.resolve` (the command, and whether it came from `tasks.json` or auto-detection), `cmd.exec`, `soundness` |
-| `critiq` | `base.resolve`, `diff.collect`, `quota.read`, `reviewer.model`, `reviewer.pick`, `reviewer.exec`, `verdict.parse`, `verdict.downgrade`, `verdict.write` |
-| `trim` | `base.resolve`, `diff.collect`, `quota.read`, `reviewer.pick`, `reviewer.exec`, `trim.write` |
+| `critiq` | `base.resolve`, `diff.collect`, `reviewer.model`, `reviewer.pick`, `reviewer.exec`, `verdict.parse`, `verdict.downgrade`, `verdict.write` |
+| `trim` | `base.resolve`, `diff.collect`, `reviewer.pick`, `reviewer.exec`, `trim.write` |
 | `review` | `base.resolve`, `review.read` |
 | `logs` | `herdr.exec` |
 | `lib` | `archive.write`. `cleanup.sh` is the one script with no `--trace` flag of its own, so its event carries the default source tag and only appears when `HERDR_SWARM_TRACE=1` is set for the session |
@@ -114,15 +113,6 @@ The same trap in the other direction is why a `verify` command must never
 reinstall the package: `pip install -e .` in a verify command repoints the
 editable install at the agent's worktree, or worse leaves the tests importing the
 main checkout.
-
-### A quota read that answers in prose
-
-`MSYS_NO_PATHCONV=1` is required on Windows. Without it Git Bash rewrites the
-leading slash and agy receives `C:/Program Files/Git/usage`, which it treats as an
-ordinary prompt about a file path. The call burns a model turn and returns prose
-instead of numbers, so every quota check silently reads as "cannot tell". The same
-trap applies to any other slash command you script. In the trace this is
-`quota.read` with a non-zero rc or "no percentages".
 
 ### A diff that looks empty
 

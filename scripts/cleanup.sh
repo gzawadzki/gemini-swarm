@@ -2,10 +2,7 @@
 # Close the agents a swarm left behind, and optionally remove their worktrees.
 # Usage: cleanup.sh [state.json] [--all] [--worktrees] [--force] [--dry-run]
 #
-# A finished agy agent does not exit. It sits in its pane as an idle process
-# still holding the shared OAuth credential, so the next launch that needs the
-# other account is refused with "accounts cannot be mixed" - true, but hard to
-# read as "your last swarm is still open". Closing agents is therefore part of
+# A finished interactive agent stays in its pane. Closing agents is part of
 # the run, not tidying up afterwards.
 #
 #   (default)     close agents that reported a result, or that herdr calls done
@@ -140,6 +137,4 @@ done
 
 echo
 echo "$closed closed, $kept left running, $removed worktree(s) removed, $failed problem(s)."
-[[ "$closed" -gt 0 || "$removed" -gt 0 ]] && \
-  echo "Account switching needs every agy process gone. Check with: scripts/agy-account.ps1 -Mode list"
 [[ "$failed" -eq 0 ]]

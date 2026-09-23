@@ -26,7 +26,7 @@ export HERDR_SWARM_STATE_DIR="$RUN/.herdr-swarm"; mkdir -p "$HERDR_SWARM_STATE_D
 write_state() { # files-json
   jq -n --arg wt "$WT" --arg sha "$BASE_SHA" --argjson files "$1" \
         --arg sf "$HERDR_SWARM_STATE_DIR/t1.result.json" --argjson now "$(date +%s)" \
-    '[{name:"t1", kind:"agy", branch:"main", base:$sha, base_sha:$sha,
+    '[{name:"t1", kind:"pi", branch:"main", base:$sha, base_sha:$sha,
        worktree_path:$wt, status_file:$sf, files:$files, pitfalls:["a trap"],
        work_budget_ms:900000, started_at:$now}]' > "$HERDR_SWARM_STATE_DIR/state.json"
   printf '{"status":"success","summary":"done","tests_passed":true}' \

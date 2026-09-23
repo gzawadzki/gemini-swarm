@@ -27,7 +27,7 @@ RUN="$T/run"; mkdir -p "$RUN/.herdr-swarm"
 STATE="$RUN/.herdr-swarm/state.json"
 
 entry() { # name state branch base worktree result?
-  printf '{"name":"%s","kind":"agy","repo":"%s","branch":"%s","base":"%s","account":"a",
+  printf '{"name":"%s","kind":"pi","repo":"%s","branch":"%s","base":"%s","account":"a",
            "workspace_id":"ws-%s","worktree_path":"%s","status_file":"%s"}' \
     "$1" "$SRC" "$3" "$4" "$1" "$5" "$RUN/.herdr-swarm/$1.result.json"
 }
@@ -44,7 +44,7 @@ reset_world() {
       skill_commit: "abc1234", skill_dirty: 2,
       skill_dirty_files: [" M file1.txt", "?? file2.txt"],
       skill_root: "/skill",
-      config: {tasks: [{name: "finished", kind: "agy", repo: $repo,
+      config: {tasks: [{name: "finished", kind: "pi", repo: $repo,
                         prompt: "do the thing", files: ["file.txt"], pitfalls: []}]}}' \
     > "$RUN/.herdr-swarm/run.json"
   echo "2026-09-13T00:00:00Z launch  -  run.start  1 task(s)" > "$RUN/.herdr-swarm/trace.log"
@@ -75,7 +75,6 @@ grepok "keeps the working agent"       "keep   busy"         "$out"
 grepok "keeps the idle-without-result" "keep   silent"       "$out"
 grepok "two ctrl+c in one send-keys"   "send-keys finished ctrl+c ctrl+c" "$(cat "$HERDR_CALL_LOG")"
 nogrep "no worktree touched"           "worktree remove"     "$(cat "$HERDR_CALL_LOG")"
-grepok "points at the account check"   "agy-account.ps1 -Mode list" "$out"
 
 echo
 echo "== 2. --all closes working agents too =="

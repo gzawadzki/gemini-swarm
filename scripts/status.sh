@@ -35,10 +35,7 @@ for i in $(seq 0 $((n - 1))); do
   workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
   worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 
-  # Which Antigravity subscription did the work, since both look identical in
-  # the pane and only the credential in use told them apart.
-  # A trailing * marks a task that ran on codex because every agy account was
-  # empty for its pool; the account suffix means nothing for those.
+  # Legacy state may record a fallback or a separately selected account.
   if [[ -n "$fallback_from" ]]; then
     kind="${kind}*"
   elif [[ -n "$account" && "$account" != "a" ]]; then
@@ -181,5 +178,4 @@ echo
 echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes + VERIFY pass/skipped"
 echo "               + CRITIQUE run. Jev auto-pass approves; every other result still needs a diff read."
 echo "RESULT OVERDUE means the task passed its work_budget_ms and has not written a result file."
-echo "AGENT ending in @B ran on the second Antigravity account, because account A was at 0% when it was launched."
-echo "AGENT ending in * ran on codex because both Antigravity accounts were at 0% for its pool at launch."
+echo "AGENT ending in @B or * describes a legacy agy run. Pi rotates linked Antigravity accounts internally."

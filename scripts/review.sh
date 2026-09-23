@@ -83,7 +83,7 @@ trace "$NAME" "review.read" "verify=$verify_status critique=$critique_verdict ba
 echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
 if [[ -n "$fallback_from" ]]; then
-  echo "fallback:  ran on codex instead of $fallback_from, because no Antigravity account had quota for that pool at launch"
+  echo "fallback:  legacy run on codex instead of $fallback_from"
 elif [[ -n "$account" && "$account" != "a" ]]; then
   echo "account:   ${account^^} (the other Antigravity subscription; account A was at 0% at launch)"
 fi

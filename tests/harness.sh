@@ -5,15 +5,12 @@
 # Source it, do not execute it:
 #
 #   source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
-#   harness_fake herdr agy pwsh
+#   harness_fake herdr pi
 #   ... scenarios ...
 #   harness_summary
 #
-# The fakes are installers rather than one global set, because `agy` does two
-# unrelated jobs across the suite: it answers the quota table for the launch path
-# and it plays the reviewer for the critique path. A test file installs the
-# binaries it actually needs, so no script ever sees a binary on PATH that its
-# scenarios were not written against.
+# The fakes are installers rather than one global set. A test file installs the
+# binaries it actually needs, so no script sees an unexpected binary on PATH.
 #
 # Nothing here touches the real herdr, the real credential vault, the operator's
 # repositories or the real brief directory.
@@ -129,7 +126,7 @@ case "$1 ${2:-}" in
     printf '%s' "$4" > "$HERDR_PROMPT_FILE"
     echo '{"result":{"type":"agent_prompted"}}' ;;
   # The key spelling is checked on purpose: the real herdr rejects "ctrl-c", and
-  # a single ctrl+c usually does not exit agy.
+  # a single ctrl+c may not exit an interactive agent.
   "agent send-keys")
     name="$3"; shift 3
     if [[ "${1:-}" == "ctrl+c" && "${2:-}" == "ctrl+c" ]]; then
@@ -145,53 +142,25 @@ esac
 FAKE
 }
 
-# agy: the quota table when asked for /usage, otherwise a reviewer.
-# The real agy answers for whoever is signed in, so the fake keys the five-hour
-# figure off the same live-account file the account layer swaps.
-# Knobs: FAKE_GEM_WEEK, FAKE_GEM_5H_A, FAKE_GEM_5H_B, FAKE_PITFALLS_CHECKED
-# (the pitfalls_checked array the reviewer answers with, verbatim JSON).
-_harness_fake_agy() {
-  cat > "$BIN/agy" <<'FAKE'
+_harness_fake_pi() {
+  cat > "$BIN/pi" <<'FAKE'
 #!/usr/bin/env bash
-if [[ "$*" == *"/usage"* ]]; then
-  live=$(cat "$LOCALAPPDATA/herdr-swarm/live-account" 2>/dev/null || echo a)
-  if [[ "$live" == "b" ]]; then five="${FAKE_GEM_5H_B:-22}"; else five="${FAKE_GEM_5H_A:-22}"; fi
-  printf 'Gemini Models\tWeekly Limit Remaining\t%s%%\t2026-09-04T00:18:35Z\n' "${FAKE_GEM_WEEK:-80}"
-  printf 'Gemini Models\tFive Hour Limit Remaining\t%s%%\t2026-08-30T18:31:35Z\n' "$five"
-  printf 'Claude and GPT models\tWeekly Limit Remaining\t94%%\t2026-09-04T07:31:35Z\n'
-  printf 'Claude and GPT models\tFive Hour Limit Remaining\t82%%\t2026-08-30T20:31:35Z\n'
-  exit 0
-fi
-echo "agy $*" >> "$CALL_LOG"
-# Which brief it was handed decides which answer it gives back: the trim review
-# asks about overengineering, the critique asks for a verdict. The fenced block is
-# deliberate — real models wrap JSON in one, and the parser has to cope.
+echo "pi $*" >> "$CALL_LOG"
 if [[ "$*" == *overengineering* ]]; then
-  echo 'Sure. {"cuts":[{"file":"file.txt","what":"drop the config flag","why":"never read","saves":"3"}],"summary":"one flag too many"}'
+  echo '{"cuts":[{"file":"file.txt","what":"drop the config flag","why":"never read","saves":"3"}],"summary":"one flag too many"}'
 else
   checked="${FAKE_PITFALLS_CHECKED:-[]}"
-  echo '```json
-{"verdict":"pass","confidence":"high","issues":[],"pitfalls_checked":'"$checked"',"summary":"does what was asked"}
-```'
+  echo '{"verdict":"pass","confidence":"high","issues":[],"pitfalls_checked":'"$checked"',"summary":"does what was asked"}'
 fi
 FAKE
 }
 
-# python: stands in for the interpreter the soundness check interrogates. It
-# answers with $FAKE_PY_ORIGIN, which is where the module under test resolved
-# from - inside the worktree on a sound run, in the main checkout on the
-# editable-install trap this check exists to catch. An empty value is a module
-# that could not be resolved at all.
+# The verification suite probes Python import resolution inside and outside a
+# worktree. The fake returns the configured origin for each working directory.
 _harness_fake_python() {
   cat > "$BIN/python" <<'FAKE'
 #!/usr/bin/env bash
 echo "python(cwd=$PWD) $*" >> "$CALL_LOG"
-# Answering differently by cwd is the point. `python -c` puts its working
-# directory first on sys.path, so a probe run inside the worktree finds the
-# worktree's own package whatever the installed distribution points at.
-# $FAKE_PY_ORIGIN_CWD is that misleading answer; $FAKE_PY_ORIGIN is what the
-# environment really resolves. The trailing CR the real python emits on this
-# platform is reproduced deliberately, because the caller has to strip it.
 if [[ -n "${FAKE_PY_ORIGIN_CWD:-}" && "$PWD" == "${FAKE_PY_WORKTREE:-/nonexistent}" ]]; then
   printf '%s\r\n' "$FAKE_PY_ORIGIN_CWD"
 else
@@ -222,38 +191,5 @@ if [[ -n "${FAKE_JEV_RESPONSE:-}" ]]; then
 else
   printf '{}\n'
 fi
-FAKE
-}
-
-# pwsh stands in for the account script: -Mode list reports the vault, -Mode use
-# returns the exit code the scenario is testing and records the new live account.
-# Knobs: FAKE_VAULT_B (full|empty), FAKE_SWITCH_RC.
-_harness_fake_pwsh() {
-  cat > "$BIN/pwsh" <<'FAKE'
-#!/usr/bin/env bash
-mode=""; account=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in -Mode) mode="$2"; shift 2 ;; -Account) account="$2"; shift 2 ;; *) shift ;; esac
-done
-case "$mode" in
-  list)
-    echo "live     gemini:antigravity       sha=DEADBEEF0000 size=504 user=antigravity written=2026-08-30 15:39:47"
-    echo "vault a  herdr-swarm:agy-a        sha=AAAAAAAAAAAA size=504 user=antigravity written=2026-08-30 15:00:00"
-    if [[ "${FAKE_VAULT_B:-full}" == "full" ]]; then
-      echo "vault b  herdr-swarm:agy-b        sha=BBBBBBBBBBBB size=504 user=antigravity written=2026-08-30 15:00:00"
-    else
-      echo "vault b  herdr-swarm:agy-b        (empty)"
-    fi
-    ;;
-  use)
-    rc="${FAKE_SWITCH_RC:-0}"
-    if [[ "$rc" == "0" ]]; then
-      printf '%s' "$account" > "$LOCALAPPDATA/herdr-swarm/live-account"
-      echo "live credential set to account '$account' (sha=BBBBBBBBBBBB)"
-    else
-      echo "stub refusing the swap (rc=$rc)" >&2
-    fi
-    exit "$rc" ;;
-esac
 FAKE
 }

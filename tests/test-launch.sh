@@ -2,13 +2,13 @@
 # End-to-end dry run of scripts/launch.sh.
 # Run: bash tests/test-launch.sh
 #
-# Drives it against fake `herdr`, `agy` and `pwsh` binaries, in a throwaway
+# Drives it against fake `herdr` and `pi` binaries, in a throwaway
 # git repo. Nothing touches the real credential vault, the real herdr, or the
 # user's repos.
 set -uo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
-harness_fake herdr agy pwsh
+harness_fake herdr pi
 export HERDR_ENV=1
 
 # --- throwaway repo ---------------------------------------------------------
@@ -25,7 +25,7 @@ new_run_dir() { LAST_RUN_DIR="$T/run.$RANDOM"; LAST_STATE_DIR="$LAST_RUN_DIR/.he
 run_launch() { # runs launch.sh in the dir prepared by new_run_dir
   local dir="$LAST_RUN_DIR"
   cat > "$dir/tasks.json" <<JSON
-{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.1-pro-high","repo":"$SRC",
+{"tasks":[{"name":"t1","kind":"pi","model":"gemini-3.1-pro-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":["file.txt"],
   "pitfalls":["file.txt is read by two callers; keep the trailing newline"],
@@ -39,15 +39,15 @@ run_config() { # reads a tasks.json body on stdin, runs launch.sh against it
   ( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && bash "$REPO/scripts/launch.sh" tasks.json 2>&1 )
 }
 
-echo "== 1. live account has quota: launches on a =="
+echo "== 1. pi launches with the Antigravity provider =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_launch)
 # The installed skill is a junction to the working repo, so a run has to say which
 # tree state produced it. Reported, never blocked.
 grepok "reports the skill's commit"        "swarm skill: [0-9a-f]"           "$out"
-grepok "starts the agent"                 "starting agy agent on account a" "$out"
+grepok "starts the agent"                 "starting pi agent" "$out"
 grepok "sends the prompt"                 "sending prompt"                  "$out"
-check  "state.json records account a" "a" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
+check  "state.json leaves account to Pi" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
 check  "state.json records the branch" "agent/t1" "$(jq -r '.[0].branch' "$LAST_STATE_DIR/state.json")"
 # cleanup.sh needs the origin repo to tell whether a task branch was merged.
 # jq is a native binary, so MSYS rewrites a /tmp/... argument into its Windows
@@ -90,66 +90,46 @@ grepok "says where the run will be archived" "Run id: [0-9]\{8\}T" "$out"
 grepok "agent started through herdr"      "agent start t1"                  "$(cat "$HERDR_CALL_LOG")"
 
 echo
-echo "== 2. live account at 0%, other account has room: switches =="
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(FAKE_GEM_5H_A=0 FAKE_VAULT_B=full FAKE_SWITCH_RC=0 FAKE_GEM_5H_B=55 run_launch)
-grepok "reports the switch"               "switched the live credential to account b" "$out"
-grepok "starts on account b"              "starting agy agent on account b"           "$out"
-check  "state.json records account b" "b" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
-check  "live-account file moved to b" "b" "$(cat "$LOCALAPPDATA/herdr-swarm/live-account")"
+echo "== 2. pi uses the Antigravity provider and separates thinking level =="
+new_run_dir
+out=$(run_launch)
+grepok "starts pi" "agent start t1 --kind pi" "$(cat "$HERDR_CALL_LOG")"
+grepok "selects Antigravity" "--provider antigravity" "$(cat "$HERDR_CALL_LOG")"
+grepok "normalizes model" "--model gemini-3.1-pro" "$(cat "$HERDR_CALL_LOG")"
+grepok "sets thinking" "--thinking high" "$(cat "$HERDR_CALL_LOG")"
+grepok "approves local project files" "--approve" "$(cat "$HERDR_CALL_LOG")"
+check "pi account stays managed by the provider" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
 
 echo
-echo "== 3. switch refused because agents are running: nothing starts =="
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(FAKE_GEM_5H_A=0 FAKE_VAULT_B=full FAKE_SWITCH_RC=3 run_launch)
-grepok "explains why it stopped"          "cannot be swapped in while agy is still running" "$out"
-grepok "points at cleanup.sh"             "run scripts/cleanup.sh, then launch again"       "$out"
-grepok "reports the reset time"           "refills at 2026-08-30T18:31:35Z"                 "$out"
-check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
-check  "no worktree was created" "" "$(grep 'worktree create' "$HERDR_CALL_LOG" || true)"
-check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
+echo "== 2b. the Luna route starts Codex at xhigh =="
+new_run_dir
+out=$(run_config <<JSON
+{"tasks":[{"name":"t1","kind":"codex","model":"gpt-6-luna","effort":"xhigh","repo":"$SRC",
+  "branch":"agent/t1","prompt":"trace the coupled session failure and fix it","args":[],
+  "files":["file.txt"],"pitfalls":["the session check has two callers"],
+  "verify":"git status --porcelain"}]}
+JSON
+)
+grepok "starts the Luna worker through herdr" "agent start t1 --kind codex" "$(cat "$HERDR_CALL_LOG")"
+grepok "selects Luna 6" "--model gpt-6-luna" "$(cat "$HERDR_CALL_LOG")"
+grepok "sets xhigh reasoning" 'model_reasoning_effort="xhigh"' "$(cat "$HERDR_CALL_LOG")"
+check "state records the Luna route" "codex:gpt-6-luna:xhigh" "$(jq -r '.[0] | [.kind,.model,.effort] | join(":")' "$LAST_STATE_DIR/state.json")"
 
 echo
-echo "== 4. no second account, fallback off: nothing starts =="
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(HERDR_SWARM_NO_FALLBACK=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=empty run_launch)
-grepok "reports that no account has quota" "no Antigravity account has quota left for Gemini Models" "$out"
-grepok "says it is not launching"          "Not launching"                                          "$out"
-check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
-check  "state.json is empty" "0" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
-
-echo
-echo "== 5. switching disabled, fallback off: nothing starts =="
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(HERDR_SWARM_NO_FALLBACK=1 HERDR_SWARM_NO_SWITCHING=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=full run_launch)
-grepok "stops instead of switching"       "HERDR_SWARM_NO_SWITCHING=1 forbids switching" "$out"
-check  "live account untouched" "a" "$(cat "$LOCALAPPDATA/herdr-swarm/live-account")"
-check  "no agent was started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
-
-echo
-echo "== 5b. both accounts empty: runs on codex =="
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(FAKE_GEM_5H_A=0 FAKE_GEM_5H_B=0 FAKE_VAULT_B=full FAKE_SWITCH_RC=0 run_launch)
-grepok "announces the fallback"           "Running on codex"                    "$out"
-grepok "starts codex, no account"         "starting codex agent in pane"        "$out"
-grepok "codex started through herdr"      "agent start t1 --kind codex"         "$(cat "$HERDR_CALL_LOG")"
-grepok "codex plugins are switched off"   "\-\-disable plugins"                 "$(cat "$HERDR_CALL_LOG")"
-check  "state.json records the fallback" "agy:gemini-3.1-pro-high" "$(jq -r '.[0].fallback_from' "$LAST_STATE_DIR/state.json")"
-check  "state.json kind is codex" "codex" "$(jq -r '.[0].kind' "$LAST_STATE_DIR/state.json")"
-check  "state.json account is empty" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
-
-echo
-echo "== 5c. switching disabled: runs on codex without touching the account =="
-printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
-out=$(HERDR_SWARM_NO_SWITCHING=1 FAKE_GEM_5H_A=0 FAKE_VAULT_B=full run_launch)
-grepok "announces the fallback"           "Running on codex"                    "$out"
-check  "live account untouched" "a" "$(cat "$LOCALAPPDATA/herdr-swarm/live-account")"
-
-echo
+echo "== 3. old agy configs are rejected explicitly =="
+new_run_dir
+out=$(run_config <<JSON
+{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do the thing","args":[],
+  "files":["file.txt"],"pitfalls":[]}]}
+JSON
+)
+grepok "migration message" "kind 'agy' was replaced by 'pi'" "$out"
+check "no agent started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
 echo "== 5d. a work-budget-sized ready timeout is clamped, not sent =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_config <<JSON
-{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+{"tasks":[{"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":["file.txt"],"pitfalls":[],"timeout_ms":1800000}]}
 JSON
@@ -167,7 +147,7 @@ echo "== 5e. a failed agent start leaves no branch behind =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 git -C "$SRC" branch -f agent/t1 main
 out=$(FAKE_START_RC=1 run_launch)
-grepok "reports the failure"              "agy did not start"               "$out"
+grepok "reports the failure"              "pi did not start"               "$out"
 grepok "removed the worktree"             "worktree remove"                 "$(cat "$HERDR_CALL_LOG")"
 # The branch, not the worktree, is what blocks the retry: `worktree create`
 # refuses a branch that already exists.
@@ -179,9 +159,9 @@ echo "== 5f. a task with no pitfalls is skipped, and the next task still launche
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_config <<JSON
 {"tasks":[
- {"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+ {"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],"files":["file.txt"]},
- {"name":"t2","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+ {"name":"t2","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t2","prompt":"do the other thing","args":[],
   "files":["file.txt"],"pitfalls":["the loader caches file.txt for the process lifetime"]}]}
 JSON
@@ -203,7 +183,7 @@ echo
 echo "== 5g. a task with no files is skipped =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_config <<JSON
-{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+{"tasks":[{"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],"pitfalls":["a trap"]}]}
 JSON
 )
@@ -215,7 +195,7 @@ echo
 echo "== 5g2. an empty files array is skipped =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_config <<JSON
-{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+{"tasks":[{"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":[],"pitfalls":["a trap"]}]}
 JSON
@@ -229,10 +209,10 @@ echo "== 5g3. a non-string entry is rejected before a worktree exists =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_config <<JSON
 {"tasks":[
- {"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+ {"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":["file.txt"],"pitfalls":[3]},
- {"name":"t2","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+ {"name":"t2","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t2","prompt":"do the other thing","args":[],
   "files":["file.txt"],"pitfalls":["the loader caches file.txt"]}]}
 JSON
@@ -251,7 +231,7 @@ echo
 echo "== 5h. an empty pitfalls list warns but launches =="
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"; new_run_dir
 out=$(run_config <<JSON
-{"tasks":[{"name":"t1","kind":"agy","model":"gemini-3.8-flash-high","repo":"$SRC",
+{"tasks":[{"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
   "branch":"agent/t1","prompt":"do the thing","args":[],
   "files":["file.txt"],"pitfalls":[]}]}
 JSON

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch one or more gemini/agy sub-agents through herdr, each on its own
+# Launch one or more pi/gemini/codex sub-agents through herdr, each on its own
 # git worktree + branch, per a tasks.json config.
 # Usage: launch.sh [--trace] <tasks.json>
 set -euo pipefail
@@ -159,63 +159,25 @@ for i in $(seq 0 $((n_tasks - 1))); do
     effort=""
   fi
 
-  # Antigravity quota runs down per pool and can reach 0% mid-swarm. An agent
-  # that cannot make a single call looks exactly like one still thinking, so
-  # check the quota first. When the live account has run dry, switch to the
-  # other one; when that is empty too, route the task to codex instead.
-  # HERDR_SWARM_NO_FALLBACK=1 turns the codex step off, and then the task is not
-  # launched at all.
+  # pi-antigravity manages linked accounts and retries the next one on a hard
+  # quota wall. There is no shared agy credential to swap before launch.
   fallback_from=""
   account=""
   if [[ "$kind" == "agy" ]]; then
-    was_live=$(account_live || echo "a")
-    pick_rc=0
-    account=$(agy_pick_account "$model") || pick_rc=$?
-    trace "$name" "quota.check" "$(agy_family_for_model "$model") -> account=${account:-none} rc=$pick_rc (0=ok 1=all empty 2=unknown 3=agents running 4=no switching)"
-    no_quota=""
-    case "$pick_rc" in
-      1)
-        # Covers both "the other account is empty too" and "there is no other
-        # account in the vault"; either way no agy account can run this task now.
-        no_quota="no Antigravity account has quota left for $(agy_family_for_model "$model")"
-        ;;
-      2)
-        echo "WARN: [$name] could not read the agy quota, so the task runs on the account that is live now. Check it by hand with: MSYS_NO_PATHCONV=1 agy -p /usage" >&2
-        ;;
-      3)
-        # Every agy process on this profile shares one credential, and a running
-        # agent rewrites it when its token refreshes. Switching now would change
-        # that agent's account and lose the credential we swapped in.
-        echo "ERROR: [$name] account ${was_live} is at 0% for $(agy_family_for_model "$model") and the other account cannot be swapped in while agy is still running. Agents that already finished still hold the credential until their pane is closed: run scripts/cleanup.sh, then launch again. $(agy_reset_note "$model")" >&2
-        continue
-        ;;
-      4)
-        no_quota="account ${was_live} is at 0% for $(agy_family_for_model "$model") and HERDR_SWARM_NO_SWITCHING=1 forbids switching accounts"
-        ;;
-    esac
-    if [[ -n "$no_quota" ]]; then
-      if [[ "${HERDR_SWARM_NO_FALLBACK:-0}" == "1" ]]; then
-        echo "ERROR: [$name] $no_quota. Not launching. $(agy_reset_note "$model")" >&2
-        continue
-      fi
-      echo "==> [$name] $no_quota. Running on codex $CODEX_FALLBACK_MODEL ($CODEX_FALLBACK_EFFORT) instead of agy ${model:-default}."
-      fallback_from="agy:${model:-default}"
-      kind="codex"
-      model="$CODEX_FALLBACK_MODEL"
-      effort="$CODEX_FALLBACK_EFFORT"
-      account=""
-      trace "$name" "kind.resolve" "codex $model / $effort (fallback from $fallback_from)"
-    elif [[ "$account" != "$was_live" ]]; then
-      echo "==> [$name] account $was_live is at 0% for $(agy_family_for_model "$model"); switched the live credential to account $account."
-    fi
+    echo "ERROR: [$name] kind 'agy' was replaced by 'pi'. Update the task config and relaunch. Skipping." >&2
+    continue
   fi
   [[ -n "$fallback_from" ]] || trace "$name" "kind.resolve" "$kind ${model:-default}${effort:+ / $effort} (no fallback)"
 
   model_args=()
   case "$kind" in
-    agy)
-      [[ -n "$model" ]] && model_args+=(--model "$model")
-      [[ -n "$effort" ]] && model_args+=(--effort "$effort")
+    pi)
+      if ! command -v pi >/dev/null 2>&1; then
+        echo "ERROR: [$name] pi is not on PATH. Skipping." >&2
+        continue
+      fi
+      model="${model:-gemini-3.8-flash-high}"
+      mapfile -t model_args < <(pi_model_args "$model" "$effort")
       ;;
     codex)
       # codex takes reasoning depth through config, not a flag. The inner quotes
@@ -335,9 +297,7 @@ status is "success" or "failure", tests_passed is true or false. Create parent
 directories if needed. Write it as your very last action, once the tree is clean.
 BRIEF
 
-  # Both accounts start the same way. Which subscription the agent draws on was
-  # decided above, by swapping the credential agy reads at start-up; nothing
-  # about the launch itself differs.
+  # Pi's Antigravity provider handles linked-account rotation within the agent.
   echo "==> [$name] starting $kind agent${account:+ on account $account} in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
   # One agent failing to start must not abandon the tasks after it, and it must
   # not leave an empty worktree behind either. Tear this one down and carry on.
