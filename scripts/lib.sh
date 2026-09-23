@@ -590,11 +590,32 @@ CRITIQUE_MODEL="${HERDR_SWARM_CRITIQUE_MODEL:-gemini-3.8-flash-high}"
 CRITIQUE_EFFORT="${HERDR_SWARM_CRITIQUE_EFFORT:-medium}"
 CRITIQUE_TIMEOUT="${HERDR_SWARM_CRITIQUE_TIMEOUT:-600}"
 
-# Jev is the fast path through the judgement gate. A configured API key enables
-# it by default; unset the flag to return to the generative-only path. The
-# threshold is P(problem), so lower is stricter. Keep the model configurable:
-# once a threshold is calibrated against a version, pin that version here.
-JEV_AUTO_ACCEPT="${HERDR_SWARM_JEV_AUTO_ACCEPT:-1}"
+# Jev evaluates typed risk signals for the judgement gate. Modes:
+#   shadow       record risk signals while sending all diffs to the generative reviewer (default)
+#   auto_accept  allow automatic acceptance when risk <= threshold and all preconditions pass
+#   disabled     skip Jev calls entirely
+#
+# Shadow is the default until a labeled local evaluation demonstrates an
+# acceptable false-accept rate. Automatic acceptance requires explicit opt-in.
+JEV_MODE="${HERDR_SWARM_JEV_MODE:-}"
+if [[ -z "$JEV_MODE" ]]; then
+  if [[ "${HERDR_SWARM_JEV_AUTO_ACCEPT:-0}" == "1" || "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "true" ]]; then
+    JEV_MODE="auto_accept"
+  elif [[ "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "0" || "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "false" ]]; then
+    JEV_MODE="disabled"
+  else
+    JEV_MODE="shadow"
+  fi
+fi
+case "$JEV_MODE" in
+  auto_accept|auto-accept) JEV_MODE="auto_accept" ;;
+  shadow)                  JEV_MODE="shadow" ;;
+  disabled|off)            JEV_MODE="disabled" ;;
+  *)                       JEV_MODE="shadow" ;;
+esac
+
+JEV_AUTO_ACCEPT="${HERDR_SWARM_JEV_AUTO_ACCEPT:-0}"
+[[ "$JEV_MODE" == "auto_accept" ]] && JEV_AUTO_ACCEPT=1
 JEV_ACCEPT_MAX="${HERDR_SWARM_JEV_ACCEPT_MAX:-0.10}"
 JEV_MODEL="${HERDR_SWARM_JEV_MODEL:-}"
 JEV_TIMEOUT="${HERDR_SWARM_JEV_TIMEOUT:-60}"

@@ -58,6 +58,7 @@ reply_file="${critique_file%.json}.reply.txt"
 critique_kind=""
 confidence=""
 auto_accepted=false
+jev_mode="$JEV_MODE"
 jev_attempted=false
 jev_route=""
 jev_model=""
@@ -83,6 +84,7 @@ write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
         --argjson pitfalls_checked "$checked" --argjson pitfalls_declared "${n_pitfalls:-0}" \
         --argjson truncated "${diff_truncated:-false}" \
         --argjson auto_accepted "$auto_accepted" \
+        --arg jev_mode "$jev_mode" \
         --argjson jev_attempted "$jev_attempted" \
         --arg jev_route "$jev_route" --arg jev_model "$jev_model" \
         --argjson jev_risk_max "$jev_risk_max" \
@@ -95,7 +97,8 @@ write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
       pitfalls_checked: $pitfalls_checked, pitfalls_declared: $pitfalls_declared,
       diff_truncated: $truncated,
       auto_accepted: $auto_accepted,
-      jev: {attempted: $jev_attempted, route: $jev_route, model: $jev_model,
+      mode: $jev_mode,
+      jev: {mode: $jev_mode, attempted: $jev_attempted, route: $jev_route, model: $jev_model,
             risk_max: $jev_risk_max, threshold: $jev_threshold, signals: $jev_signals},
       issues: $issues, summary: $summary, ran_at: $ts}' > "$critique_file"
   trace "$NAME" "verdict.write" "$1${confidence:+ (confidence: $confidence)} -> $critique_file"
@@ -127,10 +130,12 @@ fi
 
 verify_status="not run"
 verify_cmd=""
+verify_soundness="unknown"
 verify_file=$(verify_file_for "$NAME")
 if [[ -f "$verify_file" ]]; then
   verify_status=$(jq -r '.status // "?"' "$verify_file" 2>/dev/null || echo "?")
   verify_cmd=$(jq -r '.cmd // ""' "$verify_file" 2>/dev/null || echo "")
+  verify_soundness=$(jq -r '.soundness // "unknown"' "$verify_file" 2>/dev/null || echo "unknown")
 fi
 
 [[ -n "$task_prompt" ]] || task_prompt="(not recorded; this task predates prompts being stored in state.json)"
@@ -144,7 +149,7 @@ fi
 # to the existing generative reviewer, which can explain and localise the issue.
 
 try_jev_auto_accept() {
-  [[ "$JEV_AUTO_ACCEPT" == "1" ]] || return 1
+  [[ "$jev_mode" != "disabled" ]] || return 1
 
   local api_key="" endpoint="" requested_model=""
   if [[ -n "${TYPESAFE_API_KEY:-}" ]]; then
@@ -170,8 +175,8 @@ try_jev_auto_accept() {
       trace "$NAME" "jev.skip" "invalid HERDR_SWARM_JEV_ACCEPT_MAX=$JEV_ACCEPT_MAX"
       return 1
     }
-  [[ "$verify_status" == "pass" ]] || {
-    trace "$NAME" "jev.skip" "verify=$verify_status; automatic acceptance requires pass"
+  [[ "$verify_status" == "pass" && "$verify_soundness" == "sound" ]] || {
+    trace "$NAME" "jev.skip" "verify status=$verify_status soundness=$verify_soundness; automatic acceptance requires pass and soundness sound"
     return 1
   }
   [[ "$diff_truncated" == "false" ]] || {
@@ -207,6 +212,7 @@ try_jev_auto_accept() {
     --arg model "$requested_model" \
     --arg prompt "$task_prompt" \
     --arg verify_status "$verify_status" \
+    --arg verify_soundness "$verify_soundness" \
     --arg verify_cmd "$verify_cmd" \
     --arg diff_stat "$diff_stat" \
     --arg diff_text "$diff_body" \
@@ -224,7 +230,7 @@ try_jev_auto_accept() {
         model: $model,
         state: {
           task: {prompt: $prompt, declared_files: $files, declared_pitfalls: $pitfalls},
-          verification: {status: $verify_status, command: $verify_cmd},
+          verification: {status: $verify_status, soundness: $verify_soundness, command: $verify_cmd},
           change: {stat: $diff_stat, diff: $diff_text}
         },
         questions: {
@@ -303,7 +309,12 @@ try_jev_auto_accept() {
   jev_model=$(jq -r --arg fallback "$requested_model" '.model // $fallback' "$response_file")
   jev_signals=$(jq -c '.answers | with_entries(.value = .value.noul)' "$response_file")
   jev_risk_max=$(jq '[.answers[].noul] | max' "$response_file")
-  trace "$NAME" "jev.result" "route=$jev_route model=$jev_model max=$jev_risk_max threshold=$JEV_ACCEPT_MAX"
+  trace "$NAME" "jev.result" "mode=$jev_mode route=$jev_route model=$jev_model max=$jev_risk_max threshold=$JEV_ACCEPT_MAX"
+
+  if [[ "$jev_mode" != "auto_accept" ]]; then
+    trace "$NAME" "jev.shadow" "mode=$jev_mode max risk $jev_risk_max; falling through to generative reviewer"
+    return 1
+  fi
 
   if ! jq -en --argjson risk "$jev_risk_max" --arg threshold "$JEV_ACCEPT_MAX" \
       '$risk <= ($threshold | tonumber)' >/dev/null 2>&1; then
