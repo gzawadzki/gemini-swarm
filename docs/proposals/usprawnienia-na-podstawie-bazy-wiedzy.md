@@ -1,6 +1,6 @@
 # Propozycje usprawnień gemini-swarm na podstawie bazy wiedzy
 
-Status: P0 i P1 zaimplementowano na gałęzi `implementation/knowledge-proposal`. Dla P2 udokumentowano ograniczenia danych o kwotach bez zmiany routingu. Skuteczność progu Jev wymaga jeszcze ludzkich ocen archiwalnych diffów; do tego czasu tryb shadow jest domyślny.
+Status: bramkę Jev i narzędzia P1 zaimplementowano na gałęzi `implementation/knowledge-proposal`. Launcher odmawia startu workerów bez świadomej zgody na wykonanie bez sandboxa; izolacja procesów, sieci i sekretów wymaga jeszcze rzeczywistego backendu sandboxa. Dla P2 udokumentowano ograniczenia danych o kwotach bez zmiany routingu. Skuteczność progu Jev wymaga ludzkich ocen archiwalnych diffów; do tego czasu tryb shadow jest domyślny.
 
 ## Stan obecny
 
