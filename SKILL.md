@@ -96,8 +96,15 @@ which `kind`, `model`, and `effort` to put on each task after the worker gate.
 ### 3. Launch
 
 ```bash
-scripts/launch.sh tasks.json          # add --trace on a first run in a new repo
+scripts/launch.sh --allow-unsandboxed tasks.json   # add --trace on a first run in a new repo
 ```
+
+Unattended workers run unsandboxed. Git worktrees isolate git branches, but do
+not provide OS-level process, filesystem, or network isolation, and Pi `--approve`
+only auto-approves project-file actions. `launch.sh` fails closed unless you
+explicitly opt into unsandboxed execution with `--allow-unsandboxed` or
+`HERDR_SWARM_ALLOW_UNSANDBOXED=1`. That decision is printed and archived in
+`.herdr-swarm/run.json`.
 
 Each task gets its own worktree and branch. **Never point two agents at the same
 working directory**: two agents editing the same checked-out files in parallel
@@ -108,10 +115,14 @@ For each task `launch.sh` creates the
 worktree, starts the agent, writes its brief to `~/.herdr/briefs/<name>.md`,
 sends a one-line pointer at that file, confirms the agent reacted, and records the
 task in `.herdr-swarm/state.json`. It also stamps the run's id, the config as
-launched and the skill commit it ran on into `.herdr-swarm/run.json`.
+launched, the skill commit it ran on, and the unsandboxed permission decision into
+`.herdr-swarm/run.json`.
 
 Launching confirms that the agent started and accepted the prompt. It confirms
 nothing about the work.
+
+**Reference:** [worker permissions and sandboxing](docs/reference/worker-permissions.md) —
+the concrete threat model for host files, network, and secrets, and the fail-closed launch procedure.
 
 **Reference:** [accounts and quota](docs/reference/accounts-and-quota.md) explains Pi's linked accounts and quota commands.
 

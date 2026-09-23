@@ -88,12 +88,51 @@ strip_trace_flag() {
   export HERDR_SWARM_TRACE
 }
 
+# Pull --trace, --no-trace, and worker permission override flags out of arguments.
+# Scoped to launch.sh for worker orchestration.
+strip_launch_flags() {
+  ARGV=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --trace)    HERDR_SWARM_TRACE=1 ;;
+      --no-trace) HERDR_SWARM_TRACE=0 ;;
+      --allow-unsandboxed|--dangerously-allow-unsandboxed)
+                  HERDR_SWARM_ALLOW_UNSANDBOXED=1 ;;
+      *)          ARGV+=("$a") ;;
+    esac
+  done
+  export HERDR_SWARM_TRACE
+  export HERDR_SWARM_ALLOW_UNSANDBOXED
+}
+
 # Announce the log once per run, so a --trace invocation says where to look
 # instead of leaving the user to guess.
 trace_banner() {
   trace_enabled || return 0
   echo "trace: $(trace_file)" >&2
 }
+
+# --- Worker permissions and sandboxing ---------------------------------------
+#
+# Workers run unattended in background herdr panes. Neither git worktrees nor
+# Pi --approve or --tools provide OS isolation: bash tool execution has full
+# ambient privileges over host files, network, and secrets.
+#
+# An enforceable sandbox requires platform/herdr support. Where no real OS sandbox
+# is available, execution runs unsandboxed. launch.sh fails closed unless the
+# operator explicitly permits unsandboxed worker execution for that run.
+
+worker_sandbox_available() {
+  # Returns 0 only if an enforceable OS sandbox is available.
+  # Neither git worktrees nor Pi --tools/--approve are OS isolation.
+  return 1
+}
+
+worker_unsandboxed_allowed() {
+  [[ "${HERDR_SWARM_ALLOW_UNSANDBOXED:-0}" == "1" ]]
+}
+
 
 # Two different clocks, kept apart on purpose. `ready_timeout_ms` is how long
 # herdr waits for the agent's TUI to accept input; herdr rejects anything above

@@ -95,8 +95,16 @@ all, and the rules for writing a prompt.
 in parallel:
 
 ```bash
-scripts/launch.sh tasks.json
+scripts/launch.sh --allow-unsandboxed tasks.json
 ```
+
+Workers run unattended and unsandboxed (git worktrees and Pi `--approve` / `--tools`
+do not provide OS process, filesystem, or network isolation). `launch.sh`
+**fails closed** unless the operator explicitly opts into unsandboxed execution
+for that run, either with `--allow-unsandboxed` or via
+`HERDR_SWARM_ALLOW_UNSANDBOXED=1`. The decision is printed to the console and
+permanently recorded in `.herdr-swarm/run.json`. See
+[worker permissions and sandboxing](docs/reference/worker-permissions.md).
 
 **3. Check status.** A task is review-ready only when herdr says `idle` or
 `done`, its result file says `success`, **and** its worktree is clean:
@@ -172,6 +180,7 @@ a pointer from each step to the reference it needs. The references are:
 
 | document | what is in it |
 |----------|---------------|
+| [worker permissions and sandboxing](docs/reference/worker-permissions.md) | concrete threat model for host files, network, and secrets; sandbox reality; fail-closed launch |
 | [defining a task](docs/reference/task-definition.md) | the slice test, every schema field, and the rules for writing a prompt |
 | [models and routing](docs/reference/models-and-routing.md) | the three agent kinds, the model menu, and which slug a task should get |
 | [accounts and quota](docs/reference/accounts-and-quota.md) | Pi's account and quota commands |
