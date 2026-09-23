@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""jev-eval.py - Evaluation tooling for Jev semantic critique decisions.
+"""jev-eval.py - Evaluation toolkit for Jev semantic critique decisions.
 
-Prepares candidate JSONL records from existing swarm run archives leaving
-human labels blank, and generates evaluation reports for supplied thresholds
-measuring coverage and false accepts broken down by named risk type and diff
-size bucket.
-
-Stdlib only. Never infers human labels from Jev or generative critique.
-Never describes the 0.10 threshold as calibrated.
+Prepares candidate JSONL records from run archives (leaving human labels blank),
+and evaluates labeled records measuring coverage and false accepts on scored diffs
+by named risk type and diff size bucket.
 """
 
 from __future__ import annotations
@@ -19,14 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-DIFF_SIZE_BUCKETS = [
-    "small (<=100)",
-    "medium (101-400)",
-    "large (401-600)",
-    "oversized (>600)",
-]
-
-STANDARD_RISK_TYPES = [
+DIFF_BUCKETS = ["small (<=100)", "medium (101-400)", "large (401-600)", "oversized (>600)"]
+STANDARD_RISKS = [
     "requirement_missing",
     "correctness_defect",
     "unrelated_change",
@@ -37,200 +27,129 @@ STANDARD_RISK_TYPES = [
 
 
 def parse_diff_stat(diff_text: str) -> Tuple[int, int, int]:
-    """Parse unified diff text into (additions, deletions, total_lines_changed)."""
+    """Return (additions, deletions, total_lines_changed)."""
     if not diff_text:
         return 0, 0, 0
-    additions = 0
-    deletions = 0
+    adds = dels = 0
     for line in diff_text.splitlines():
         if line.startswith("+++") or line.startswith("---"):
             continue
         if line.startswith("+"):
-            additions += 1
+            adds += 1
         elif line.startswith("-"):
-            deletions += 1
-    return additions, deletions, additions + deletions
+            dels += 1
+    return adds, dels, adds + dels
 
 
-def get_diff_size_bucket(lines: int) -> str:
-    """Classify diff line count into standard swarm size buckets."""
+def get_diff_bucket(lines: int) -> str:
+    """Classify line count into standard size buckets."""
     if lines <= 100:
         return "small (<=100)"
-    elif lines <= 400:
+    if lines <= 400:
         return "medium (101-400)"
-    elif lines <= 600:
+    if lines <= 600:
         return "large (401-600)"
-    else:
-        return "oversized (>600)"
+    return "oversized (>600)"
 
 
-def normalize_bucket(bucket_val: Any, diff_lines: Optional[int] = None) -> str:
-    """Normalize bucket representation to one of standard diff size buckets."""
-    if isinstance(bucket_val, str) and bucket_val:
-        b_lower = bucket_val.lower()
-        if "small" in b_lower or "<=100" in b_lower:
-            return "small (<=100)"
-        if "medium" in b_lower or "101-400" in b_lower:
-            return "medium (101-400)"
-        if "large" in b_lower or "401-600" in b_lower:
-            return "large (401-600)"
-        if "oversize" in b_lower or ">600" in b_lower:
-            return "oversized (>600)"
-    if diff_lines is not None:
-        return get_diff_size_bucket(diff_lines)
-    return "small (<=100)"
+def normalize_bucket(raw: Any, lines: int = 0) -> str:
+    s = str(raw).lower() if raw else ""
+    for name, tag in [("small", "<=100"), ("medium", "101-400"), ("large", "401-600"), ("oversized", ">600")]:
+        if name in s or tag in s:
+            return f"{name} ({tag})" if "(" not in name else name
+    return get_diff_bucket(lines)
 
 
 def find_run_directories(paths: List[str]) -> List[Path]:
-    """Find run archive directories containing state.json."""
-    run_dirs: List[Path] = []
+    """Find directories containing state.json."""
+    dirs: List[Path] = []
     for p_str in paths:
         p = Path(p_str).expanduser()
         if not p.exists():
             continue
         if p.is_file() and p.name == "state.json":
-            run_dirs.append(p.parent)
+            dirs.append(p.parent)
         elif p.is_dir():
             if (p / "state.json").is_file():
-                run_dirs.append(p)
+                dirs.append(p)
             else:
-                for sub in sorted(p.iterdir()):
-                    if sub.is_dir() and (sub / "state.json").is_file():
-                        run_dirs.append(sub)
-    # Deduplicate while preserving order
+                dirs.extend(sub for sub in sorted(p.iterdir()) if sub.is_dir() and (sub / "state.json").is_file())
     seen = set()
-    unique: List[Path] = []
-    for d in run_dirs:
-        resolved = d.resolve()
-        if resolved not in seen:
-            seen.add(resolved)
-            unique.append(d)
-    return unique
+    return [d for d in dirs if not (d.resolve() in seen or seen.add(d.resolve()))]
 
 
-def extract_jev_info(
-    archive_dir: Path, task_name: str
-) -> Optional[Dict[str, Any]]:
-    """Extract Jev signal vector and metadata from critique files.
-
-    Handles prior archives that may not contain Jev signals.
-    Never relies only on risk_max: records the full specific signal vector.
-    """
-    critique_file = archive_dir / f"{task_name}.critique.json"
-    jev_response_file = archive_dir / f"{task_name}.critique.jev-response.json"
-
-    attempted = False
-    route = ""
-    model = ""
+def extract_jev_info(archive_dir: Path, name: str) -> Optional[Dict[str, Any]]:
+    """Extract Jev signal vector and metadata; handles archives without Jev."""
+    c_file = archive_dir / f"{name}.critique.json"
+    r_file = archive_dir / f"{name}.critique.jev-response.json"
+    attempted, route, model = False, "", ""
     risk_max: Optional[float] = None
     signals: Dict[str, float] = {}
 
-    if critique_file.is_file():
+    if c_file.is_file():
         try:
-            with critique_file.open("r", encoding="utf-8", errors="replace") as f:
+            with c_file.open("r", encoding="utf-8", errors="replace") as f:
                 c_data = json.load(f)
-            if isinstance(c_data, dict) and "jev" in c_data and isinstance(c_data["jev"], dict):
-                j_obj = c_data["jev"]
-                attempted = bool(j_obj.get("attempted", False))
-                route = str(j_obj.get("route", "") or "")
-                model = str(j_obj.get("model", "") or "")
-                raw_max = j_obj.get("risk_max")
-                if raw_max is not None:
-                    try:
-                        risk_max = float(raw_max)
-                    except (ValueError, TypeError):
-                        pass
-                raw_signals = j_obj.get("signals")
-                if isinstance(raw_signals, dict):
-                    for k, v in raw_signals.items():
-                        try:
-                            signals[str(k)] = float(v)
-                        except (ValueError, TypeError):
-                            pass
+            if isinstance(c_data, dict) and isinstance(c_data.get("jev"), dict):
+                j = c_data["jev"]
+                attempted, route, model = bool(j.get("attempted", False)), str(j.get("route", "") or ""), str(j.get("model", "") or "")
+                if j.get("risk_max") is not None:
+                    risk_max = float(j["risk_max"])
+                if isinstance(j.get("signals"), dict):
+                    signals = {str(k): float(v) for k, v in j["signals"].items() if v is not None}
         except Exception:
             pass
 
-    if (not signals or risk_max is None) and jev_response_file.is_file():
+    if (not signals or risk_max is None) and r_file.is_file():
         try:
-            with jev_response_file.open("r", encoding="utf-8", errors="replace") as f:
+            with r_file.open("r", encoding="utf-8", errors="replace") as f:
                 r_data = json.load(f)
             if isinstance(r_data, dict):
                 model = model or str(r_data.get("model", "") or "")
-                answers = r_data.get("answers")
+                answers = r_data.get("answers", {})
                 if isinstance(answers, dict):
-                    for k, v in answers.items():
-                        if isinstance(v, dict) and "noul" in v:
-                            try:
-                                signals[str(k)] = float(v["noul"])
-                            except (ValueError, TypeError):
-                                pass
-                    if signals:
-                        attempted = True
-                        if risk_max is None:
-                            risk_max = max(signals.values())
+                    extracted = {k: float(v["noul"]) for k, v in answers.items() if isinstance(v, dict) and "noul" in v}
+                    if extracted:
+                        signals, risk_max, attempted = extracted, max(extracted.values()), True
         except Exception:
             pass
 
     if not attempted and not signals and risk_max is None:
         return None
-
     if risk_max is None and signals:
         risk_max = max(signals.values())
-
-    return {
-        "attempted": attempted,
-        "route": route,
-        "model": model,
-        "risk_max": risk_max,
-        "signals": signals,
-    }
+    return {"attempted": attempted, "route": route, "model": model, "risk_max": risk_max, "signals": signals}
 
 
-def prepare_candidate_records(
-    archive_dirs: List[Path],
-) -> List[Dict[str, Any]]:
-    """Scan archive directories and prepare candidate JSONL records.
-
-    Leaves human labels explicitly blank (None).
-    Never infers human labels from Jev or critique verdicts.
-    """
+def prepare_candidate_records(archive_dirs: List[Path]) -> List[Dict[str, Any]]:
+    """Scan archive dirs; candidate records leave human labels blank (None)."""
     records: List[Dict[str, Any]] = []
-
     for d in archive_dirs:
         state_file = d / "state.json"
         if not state_file.is_file():
             continue
-
         run_id = d.name
-        run_meta_file = d / "run.json"
-        if run_meta_file.is_file():
+        run_meta = d / "run.json"
+        if run_meta.is_file():
             try:
-                with run_meta_file.open("r", encoding="utf-8", errors="replace") as f:
+                with run_meta.open("r", encoding="utf-8", errors="replace") as f:
                     meta = json.load(f)
                 if isinstance(meta, dict) and meta.get("run_id"):
                     run_id = str(meta["run_id"])
             except Exception:
                 pass
-
         try:
             with state_file.open("r", encoding="utf-8", errors="replace") as f:
-                state_data = json.load(f)
+                tasks = json.load(f)
         except Exception:
             continue
-
-        if not isinstance(state_data, list):
+        if not isinstance(tasks, list):
             continue
 
-        for task in state_data:
+        for task in tasks:
             if not isinstance(task, dict):
                 continue
             name = str(task.get("name", "unknown"))
-            prompt = str(task.get("prompt", ""))
-            files = task.get("files", [])
-            pitfalls = task.get("pitfalls", [])
-            worker_model = str(task.get("model", ""))
-
-            # Read diff
             diff_file = d / f"{name}.diff"
             diff_text = ""
             if diff_file.is_file():
@@ -239,421 +158,245 @@ def prepare_candidate_records(
                         diff_text = f.read()
                 except Exception:
                     pass
-
-            adds, dels, total_lines = parse_diff_stat(diff_text)
-            diff_stat = f"+{adds}/-{dels}" if (adds > 0 or dels > 0) else ""
-            bucket = get_diff_size_bucket(total_lines)
-
-            # Jev signals
-            jev_info = extract_jev_info(d, name)
-
-            record = {
+            adds, dels, total = parse_diff_stat(diff_text)
+            records.append({
                 "id": f"{run_id}:{name}",
                 "run_id": run_id,
                 "task_name": name,
-                "prompt": prompt,
-                "declared_files": files,
-                "declared_pitfalls": pitfalls,
-                "worker_model": worker_model,
-                "diff_stat": diff_stat,
-                "diff_lines": total_lines,
-                "diff_size_bucket": bucket,
+                "prompt": str(task.get("prompt", "")),
+                "declared_files": task.get("files", []),
+                "declared_pitfalls": task.get("pitfalls", []),
+                "worker_model": str(task.get("model", "")),
+                "diff_stat": f"+{adds}/-{dels}" if (adds or dels) else "",
+                "diff_lines": total,
+                "diff_size_bucket": get_diff_bucket(total),
                 "diff": diff_text,
-                "jev": jev_info,
-                # Human label is deliberately left blank.
-                # Must never be inferred from Jev or critique verdict.
+                "jev": extract_jev_info(d, name),
                 "human_label": None,
-            }
-            records.append(record)
-
+            })
     return records
 
 
-def evaluate_labeled_records(
-    records: List[Dict[str, Any]], threshold: float
-) -> Dict[str, Any]:
-    """Evaluate labeled records against a supplied threshold.
-
-    Excludes records with missing human labels.
-    Calculates coverage and false accepts overall, by named risk, and by diff size bucket.
-    """
-    total_records = len(records)
-    missing_labels_count = 0
-    labeled_records: List[Dict[str, Any]] = []
+def evaluate_labeled_records(records: List[Dict[str, Any]], threshold: float) -> Dict[str, Any]:
+    """Evaluate labeled records against threshold on Jev-scored records only."""
+    missing_labels, unscored_labeled = 0, 0
+    scored_items: List[Dict[str, Any]] = []
 
     for r in records:
         hl = r.get("human_label")
         if hl is None:
-            missing_labels_count += 1
+            missing_labels += 1
             continue
 
-        # Valid explicit human label check
-        is_labeled = False
-        acceptable = False
-        risks: List[str] = []
-
+        is_labeled, acceptable, risks = False, False, []
         if isinstance(hl, bool):
-            is_labeled = True
-            acceptable = hl
-        elif isinstance(hl, dict):
-            acc_val = hl.get("acceptable")
-            if isinstance(acc_val, bool):
-                is_labeled = True
-                acceptable = acc_val
-                raw_risks = hl.get("risks")
-                if isinstance(raw_risks, list):
-                    risks = [str(item) for item in raw_risks]
-                elif isinstance(raw_risks, dict):
-                    risks = [str(k) for k, v in raw_risks.items() if v]
+            is_labeled, acceptable = True, hl
+        elif isinstance(hl, dict) and isinstance(hl.get("acceptable"), bool):
+            is_labeled, acceptable = True, hl["acceptable"]
+            raw_r = hl.get("risks")
+            if isinstance(raw_r, list):
+                risks = [str(x) for x in raw_r]
+            elif isinstance(raw_r, dict):
+                risks = [str(k) for k, v in raw_r.items() if v]
 
         if not is_labeled:
-            missing_labels_count += 1
+            missing_labels += 1
             continue
-
         if not acceptable and not risks:
             risks = ["unspecified"]
 
-        labeled_records.append({
-            "record": r,
-            "acceptable": acceptable,
-            "risks": risks,
+        jev = r.get("jev")
+        signals: Dict[str, float] = {}
+        risk_max: Optional[float] = None
+        if isinstance(jev, dict):
+            if isinstance(jev.get("signals"), dict):
+                signals = {str(k): float(v) for k, v in jev["signals"].items() if v is not None}
+            if jev.get("risk_max") is not None:
+                try:
+                    risk_max = float(jev["risk_max"])
+                except (ValueError, TypeError):
+                    pass
+            elif signals:
+                risk_max = max(signals.values())
+
+        if risk_max is None:
+            unscored_labeled += 1
+            continue
+
+        scored_items.append({
+            "record": r, "acceptable": acceptable, "risks": risks,
+            "risk_max": risk_max, "signals": signals,
         })
 
-    labeled_count = len(labeled_records)
-    acceptable_count = sum(1 for item in labeled_records if item["acceptable"])
-    defective_count = labeled_count - acceptable_count
+    scored_n = len(scored_items)
+    acc_n = sum(1 for x in scored_items if x["acceptable"])
+    def_n = scored_n - acc_n
+    auto_accept_n, false_accept_n, true_accept_n, correct_esc_n, false_esc_n = 0, 0, 0, 0, 0
 
-    auto_accepted_count = 0
-    false_accept_count = 0
-    true_accept_count = 0
-    correct_escalation_count = 0
-    false_escalation_count = 0
+    all_risks = set(STANDARD_RISKS)
+    for x in scored_items:
+        all_risks.update(x["risks"])
 
-    # Risk tracking
-    all_risk_types = set(STANDARD_RISK_TYPES)
-    for item in labeled_records:
-        all_risk_types.update(item["risks"])
-
-    risk_stats: Dict[str, Dict[str, Any]] = {
-        rt: {
-            "human_flagged": 0,
-            "false_accepts": 0,
-            "signal_under_threshold": 0,
-            "false_accept_rate": 0.0,
-        }
-        for rt in sorted(all_risk_types)
+    risk_stats = {
+        rt: {"human_flagged": 0, "false_accepts": 0, "signal_under_threshold": 0, "false_accept_rate": 0.0}
+        for rt in sorted(all_risks)
+    }
+    bucket_stats = {
+        b: {"scored": 0, "acceptable": 0, "defective": 0, "auto_accepted": 0, "coverage_rate": 0.0, "false_accepts": 0, "false_accept_rate": 0.0}
+        for b in DIFF_BUCKETS
     }
 
-    # Bucket tracking
-    bucket_stats: Dict[str, Dict[str, Any]] = {
-        b: {
-            "labeled": 0,
-            "acceptable": 0,
-            "defective": 0,
-            "auto_accepted": 0,
-            "coverage_rate": 0.0,
-            "false_accepts": 0,
-            "false_accept_rate": 0.0,
-        }
-        for b in DIFF_SIZE_BUCKETS
-    }
-
-    for item in labeled_records:
-        r = item["record"]
-        acceptable = item["acceptable"]
-        item_risks = item["risks"]
-
-        bucket = normalize_bucket(r.get("diff_size_bucket"), r.get("diff_lines", 0))
+    for x in scored_items:
+        acc = x["acceptable"]
+        bucket = normalize_bucket(x["record"].get("diff_size_bucket"), x["record"].get("diff_lines", 0))
         if bucket not in bucket_stats:
-            bucket_stats[bucket] = {
-                "labeled": 0,
-                "acceptable": 0,
-                "defective": 0,
-                "auto_accepted": 0,
-                "coverage_rate": 0.0,
-                "false_accepts": 0,
-                "false_accept_rate": 0.0,
-            }
-
-        bucket_stats[bucket]["labeled"] += 1
-        if acceptable:
+            bucket_stats[bucket] = {"scored": 0, "acceptable": 0, "defective": 0, "auto_accepted": 0, "coverage_rate": 0.0, "false_accepts": 0, "false_accept_rate": 0.0}
+        bucket_stats[bucket]["scored"] += 1
+        if acc:
             bucket_stats[bucket]["acceptable"] += 1
         else:
             bucket_stats[bucket]["defective"] += 1
 
-        # Evaluate Jev decision
-        jev = r.get("jev")
-        jev_signals: Dict[str, float] = {}
-        risk_max: Optional[float] = None
-
-        if isinstance(jev, dict):
-            raw_signals = jev.get("signals")
-            if isinstance(raw_signals, dict):
-                for k, v in raw_signals.items():
-                    try:
-                        jev_signals[str(k)] = float(v)
-                    except (ValueError, TypeError):
-                        pass
-            raw_max = jev.get("risk_max")
-            if raw_max is not None:
-                try:
-                    risk_max = float(raw_max)
-                except (ValueError, TypeError):
-                    pass
-            elif jev_signals:
-                risk_max = max(jev_signals.values())
-
-        jev_auto_accept = (risk_max is not None and risk_max <= threshold)
-
-        if jev_auto_accept:
-            auto_accepted_count += 1
+        jev_auto = (x["risk_max"] <= threshold)
+        if jev_auto:
+            auto_accept_n += 1
             bucket_stats[bucket]["auto_accepted"] += 1
-            if acceptable:
-                true_accept_count += 1
+            if acc:
+                true_accept_n += 1
             else:
-                false_accept_count += 1
+                false_accept_n += 1
                 bucket_stats[bucket]["false_accepts"] += 1
         else:
-            if acceptable:
-                false_escalation_count += 1
+            if acc:
+                false_esc_n += 1
             else:
-                correct_escalation_count += 1
+                correct_esc_n += 1
 
-        # Track risks
-        for rt in item_risks:
-            if rt not in risk_stats:
-                risk_stats[rt] = {
-                    "human_flagged": 0,
-                    "false_accepts": 0,
-                    "signal_under_threshold": 0,
-                    "false_accept_rate": 0.0,
-                }
-            risk_stats[rt]["human_flagged"] += 1
-            if jev_auto_accept:
-                risk_stats[rt]["false_accepts"] += 1
-            sig_val = jev_signals.get(rt)
-            if sig_val is not None and sig_val <= threshold:
-                risk_stats[rt]["signal_under_threshold"] += 1
+        for rt in x["risks"]:
+            st = risk_stats[rt]
+            st["human_flagged"] += 1
+            if jev_auto:
+                st["false_accepts"] += 1
+            if x["signals"].get(rt, 1.0) <= threshold:
+                st["signal_under_threshold"] += 1
 
-    # Calculate rates
-    for rt, stats in risk_stats.items():
-        if stats["human_flagged"] > 0:
-            stats["false_accept_rate"] = round(
-                stats["false_accepts"] / stats["human_flagged"], 4
-            )
-
-    for b, b_data in bucket_stats.items():
-        if b_data["labeled"] > 0:
-            b_data["coverage_rate"] = round(
-                b_data["auto_accepted"] / b_data["labeled"], 4
-            )
+    for st in risk_stats.values():
+        if st["human_flagged"] > 0:
+            st["false_accept_rate"] = round(st["false_accepts"] / st["human_flagged"], 4)
+    for b_data in bucket_stats.values():
+        if b_data["scored"] > 0:
+            b_data["coverage_rate"] = round(b_data["auto_accepted"] / b_data["scored"], 4)
         if b_data["auto_accepted"] > 0:
-            b_data["false_accept_rate"] = round(
-                b_data["false_accepts"] / b_data["auto_accepted"], 4
-            )
-
-    coverage_rate = (
-        round(auto_accepted_count / labeled_count, 4) if labeled_count > 0 else 0.0
-    )
-    false_accept_rate_accepted = (
-        round(false_accept_count / auto_accepted_count, 4)
-        if auto_accepted_count > 0
-        else 0.0
-    )
-    false_accept_rate_defective = (
-        round(false_accept_count / defective_count, 4)
-        if defective_count > 0
-        else 0.0
-    )
+            b_data["false_accept_rate"] = round(b_data["false_accepts"] / b_data["auto_accepted"], 4)
 
     return {
         "threshold": threshold,
         "threshold_calibrated": False,
         "threshold_status": "uncalibrated_policy_default",
         "dataset": {
-            "total_records": total_records,
-            "missing_labels_excluded": missing_labels_count,
-            "labeled_evaluated": labeled_count,
-            "human_acceptable": acceptable_count,
-            "human_defective": defective_count,
+            "total_records": len(records),
+            "missing_labels_excluded": missing_labels,
+            "total_labeled": scored_n + unscored_labeled,
+            "unscored_labeled_excluded": unscored_labeled,
+            "scored_denominator": scored_n,
+            "human_acceptable": acc_n,
+            "human_defective": def_n,
         },
         "overall": {
-            "auto_accepted": auto_accepted_count,
-            "coverage_rate": coverage_rate,
-            "false_accepts": false_accept_count,
-            "false_accept_rate_of_accepted": false_accept_rate_accepted,
-            "false_accept_rate_of_defective": false_accept_rate_defective,
-            "true_accepts": true_accept_count,
-            "correct_escalations": correct_escalation_count,
-            "false_escalations": false_escalation_count,
+            "scored_denominator": scored_n,
+            "auto_accepted": auto_accept_n,
+            "coverage_rate": round(auto_accept_n / scored_n, 4) if scored_n else 0.0,
+            "false_accepts": false_accept_n,
+            "false_accept_rate_of_accepted": round(false_accept_n / auto_accept_n, 4) if auto_accept_n else 0.0,
+            "false_accept_rate_of_defective": round(false_accept_n / def_n, 4) if def_n else 0.0,
+            "true_accepts": true_accept_n,
+            "correct_escalations": correct_esc_n,
+            "false_escalations": false_esc_n,
         },
         "by_risk_type": risk_stats,
         "by_diff_size_bucket": bucket_stats,
     }
 
 
-def format_report_text(result: Dict[str, Any]) -> str:
-    """Format evaluation results into a human-readable text report.
-
-    Never describes the 0.10 threshold as calibrated.
-    Clearly distinguishes missing labels from acceptable examples.
-    """
-    t = result["threshold"]
-    ds = result["dataset"]
-    ov = result["overall"]
-    risks = result["by_risk_type"]
-    buckets = result["by_diff_size_bucket"]
-
+def format_report_text(res: Dict[str, Any]) -> str:
+    """Format report text; threshold 0.10 is never described as calibrated."""
+    t, ds, ov, scored_n = res["threshold"], res["dataset"], res["overall"], res["dataset"]["scored_denominator"]
     lines = [
         "=" * 80,
         "                    JEV EVALUATION REPORT (SHADOW MODE EVAL)",
         "=" * 80,
         f"Threshold: {t:.2f} [UNCALIBRATED POLICY DEFAULT]",
-        "Notice:",
-        f"  HERDR_SWARM_JEV_ACCEPT_MAX={t:.2f} is an uncalibrated policy default,",
+        f"Notice: HERDR_SWARM_JEV_ACCEPT_MAX={t:.2f} is an uncalibrated policy default,",
         "  not an empirically calibrated threshold on swarm data.",
         "  It must not be assumed safe or production-ready without eval verification.",
         "-" * 80,
         "DATASET OVERVIEW (DISTINGUISHING LABELS FROM ACCEPTABLE EXAMPLES)",
         f"  Total records in input:        {ds['total_records']}",
         f"  Missing human labels:          {ds['missing_labels_excluded']}  [EXCLUDED: missing label != acceptable]",
-        f"  Explicitly labeled records:    {ds['labeled_evaluated']}  [EVALUATED]",
+        f"  Explicitly labeled records:    {ds['total_labeled']}",
+        f"    - Scored by Jev (EVALUATED): {scored_n}  [DENOMINATOR for coverage & false accepts]",
+        f"        Human acceptable (clean):{ds['human_acceptable']}  ({ds['human_acceptable'] / scored_n * 100:.1f}%)" if scored_n else "",
+        f"        Human defective (risks): {ds['human_defective']}  ({ds['human_defective'] / scored_n * 100:.1f}%)" if scored_n else "",
+        f"    - Unscored by Jev:           {ds['unscored_labeled_excluded']}  [EXCLUDED: labeled archive with no Jev signals]",
     ]
-
-    labeled_n = ds["labeled_evaluated"]
-    if labeled_n > 0:
-        acc_pct = ds["human_acceptable"] / labeled_n * 100
-        def_pct = ds["human_defective"] / labeled_n * 100
-        lines.append(f"    - Human acceptable (clean):  {ds['human_acceptable']}  ({acc_pct:.1f}%)")
-        lines.append(f"    - Human defective (risks):   {ds['human_defective']}  ({def_pct:.1f}%)")
-    else:
-        lines.append("    (No labeled records found; skipping metric breakdown)")
-        lines.append("=" * 80)
-        return "\n".join(lines)
+    lines = [line for line in lines if line]
+    if not scored_n:
+        return "\n".join(lines + ["  (No scored records available)", "=" * 80])
 
     lines.extend([
         "-" * 80,
-        f"OVERALL METRICS (threshold = {t:.2f})",
-        f"  Coverage (auto-accepted):      {ov['auto_accepted']} / {labeled_n}  ({ov['coverage_rate'] * 100:.1f}%)",
+        f"OVERALL METRICS (threshold = {t:.2f}, denominator = {scored_n} scored records)",
+        f"  Coverage (auto-accepted):      {ov['auto_accepted']} / {scored_n}  ({ov['coverage_rate'] * 100:.1f}%)",
         f"  False accepts:                 {ov['false_accepts']}  ({ov['false_accept_rate_of_accepted'] * 100:.1f}% of auto-accepted)",
-        f"  True accepts (safe):           {ov['true_accepts']} / {labeled_n}  ({ov['true_accepts'] / labeled_n * 100:.1f}%)",
-        f"  Correct escalations (caught):  {ov['correct_escalations']} / {labeled_n}  ({ov['correct_escalations'] / labeled_n * 100:.1f}%)",
-        f"  False escalations (cautious):  {ov['false_escalations']} / {labeled_n}  ({ov['false_escalations'] / labeled_n * 100:.1f}%)",
+        f"  True accepts:                  {ov['true_accepts']} / {scored_n}  ({ov['true_accepts'] / scored_n * 100:.1f}%)",
+        f"  Correct escalations:           {ov['correct_escalations']} / {scored_n}  ({ov['correct_escalations'] / scored_n * 100:.1f}%)",
+        f"  False escalations:             {ov['false_escalations']} / {scored_n}  ({ov['false_escalations'] / scored_n * 100:.1f}%)",
         "-" * 80,
         "FALSE ACCEPTS BY NAMED RISK TYPE",
         "  Risk Type                Flagged by Human  False Accepts  FA Rate  Signal <= T",
         "  -----------------------  ----------------  -------------  -------  -----------",
     ])
-
-    for r_name, r_data in sorted(risks.items()):
-        # Show all standard risks or any risk with human_flagged > 0
-        if r_name in STANDARD_RISK_TYPES or r_data["human_flagged"] > 0:
-            lines.append(
-                f"  {r_name:<23}  {r_data['human_flagged']:>16}  "
-                f"{r_data['false_accepts']:>13}  "
-                f"{r_data['false_accept_rate'] * 100:>6.1f}%  "
-                f"{r_data['signal_under_threshold']:>11}"
-            )
+    for rt, st in sorted(res["by_risk_type"].items()):
+        if rt in STANDARD_RISKS or st["human_flagged"] > 0:
+            lines.append(f"  {rt:<23}  {st['human_flagged']:>16}  {st['false_accepts']:>13}  {st['false_accept_rate'] * 100:>6.1f}%  {st['signal_under_threshold']:>11}")
 
     lines.extend([
         "-" * 80,
         "FALSE ACCEPTS AND COVERAGE BY DIFF SIZE BUCKET",
-        "  Diff Size Bucket  Labeled  Acceptable  Defective  Auto-Accepted (Coverage)  False Accepts",
+        "  Diff Size Bucket  Scored   Acceptable  Defective  Auto-Accepted (Coverage)  False Accepts",
         "  ----------------  -------  ----------  ---------  ------------------------  -------------",
     ])
-
-    for b_name in DIFF_SIZE_BUCKETS:
-        b_data = buckets.get(b_name, {})
-        lab = b_data.get("labeled", 0)
-        acc = b_data.get("acceptable", 0)
-        dfc = b_data.get("defective", 0)
-        aac = b_data.get("auto_accepted", 0)
-        cov = b_data.get("coverage_rate", 0.0) * 100
-        fa = b_data.get("false_accepts", 0)
-        far = b_data.get("false_accept_rate", 0.0) * 100
-        lines.append(
-            f"  {b_name:<16}  {lab:>7}  {acc:>10}  {dfc:>9}  "
-            f"{aac:>10} / {lab:<3} ({cov:>5.1f}%)  "
-            f"{fa:>5} ({far:>5.1f}%)"
-        )
-
+    for b in DIFF_BUCKETS:
+        bd = res["by_diff_size_bucket"].get(b, {})
+        sc, aac, cov = bd.get("scored", 0), bd.get("auto_accepted", 0), bd.get("coverage_rate", 0.0) * 100
+        fa, far = bd.get("false_accepts", 0), bd.get("false_accept_rate", 0.0) * 100
+        lines.append(f"  {b:<16}  {sc:>7}  {bd.get('acceptable', 0):>10}  {bd.get('defective', 0):>9}  {aac:>10} / {sc:<3} ({cov:>5.1f}%)  {fa:>5} ({far:>5.1f}%)")
     lines.append("=" * 80)
     return "\n".join(lines)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Jev semantic decision evaluation toolkit."
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    p = argparse.ArgumentParser(description="Jev semantic decision evaluation toolkit.")
+    sub = p.add_subparsers(dest="command", required=True)
 
-    # prepare subcommand
-    prep_parser = subparsers.add_parser(
-        "prepare",
-        help="Extract candidate JSONL records from run archives (leaving human labels blank).",
-    )
-    prep_parser.add_argument(
-        "archives",
-        nargs="*",
-        default=[],
-        help="Path(s) to run archives or directory containing run archives (default: ~/.herdr/runs or .herdr-swarm).",
-    )
-    prep_parser.add_argument(
-        "-o",
-        "--output",
-        default="",
-        help="Output JSONL file path (default: stdout).",
-    )
+    prep = sub.add_parser("prepare", help="Extract candidate records from run archives.")
+    prep.add_argument("archives", nargs="*", default=[], help="Path(s) to run archives.")
+    prep.add_argument("-o", "--output", default="", help="Output JSONL path (default: stdout).")
 
-    # report subcommand
-    rep_parser = subparsers.add_parser(
-        "report",
-        help="Evaluate labeled JSONL records at a supplied threshold.",
-    )
-    rep_parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="Path to labeled JSONL file (or - for stdin).",
-    )
-    rep_parser.add_argument(
-        "-t",
-        "--threshold",
-        type=float,
-        default=0.10,
-        help="Supplied Jev auto-accept threshold (default: 0.10).",
-    )
-    rep_parser.add_argument(
-        "-f",
-        "--format",
-        choices=["text", "json"],
-        default="text",
-        help="Output format: text table or json (default: text).",
-    )
-    rep_parser.add_argument(
-        "-o",
-        "--output",
-        default="",
-        help="Output file path (default: stdout).",
-    )
+    rep = sub.add_parser("report", help="Evaluate labeled records at supplied threshold.")
+    rep.add_argument("-i", "--input", required=True, help="Input JSONL path (or - for stdin).")
+    rep.add_argument("-t", "--threshold", type=float, default=0.10, help="Supplied threshold (default: 0.10).")
+    rep.add_argument("-f", "--format", choices=["text", "json"], default="text", help="Format (default: text).")
+    rep.add_argument("-o", "--output", default="", help="Output path (default: stdout).")
 
-    args = parser.parse_args()
-
+    args = p.parse_args()
     if args.command == "prepare":
-        search_paths = args.archives
-        if not search_paths:
-            env_run_dir = os.environ.get("HERDR_SWARM_RUN_DIR")
-            if env_run_dir:
-                search_paths.append(env_run_dir)
-            search_paths.append(os.path.expanduser("~/.herdr/runs"))
-            search_paths.append(".herdr-swarm")
-
-        archive_dirs = find_run_directories(search_paths)
-        if not archive_dirs:
+        paths = args.archives or [os.environ.get("HERDR_SWARM_RUN_DIR", ""), os.path.expanduser("~/.herdr/runs"), ".herdr-swarm"]
+        dirs = find_run_directories([p for p in paths if p])
+        if not dirs:
             sys.stderr.write("jev-eval: no run archives containing state.json were found.\n")
             sys.exit(1)
-
-        records = prepare_candidate_records(archive_dirs)
+        records = prepare_candidate_records(dirs)
         out_f = open(args.output, "w", encoding="utf-8") if args.output else sys.stdout
         try:
             for r in records:
@@ -663,40 +406,18 @@ def main() -> None:
                 out_f.close()
 
     elif args.command == "report":
-        if args.threshold < 0.0 or args.threshold > 1.0:
+        if not (0.0 <= args.threshold <= 1.0):
             sys.stderr.write("jev-eval: threshold must be between 0.0 and 1.0.\n")
             sys.exit(1)
-
-        records: List[Dict[str, Any]] = []
+        records = []
         if args.input == "-":
-            for line in sys.stdin:
-                line = line.strip()
-                if line:
-                    try:
-                        records.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
+            records = [json.loads(line) for line in sys.stdin if line.strip()]
         else:
-            in_path = Path(args.input).expanduser()
-            if not in_path.is_file():
-                sys.stderr.write(f"jev-eval: file not found: {args.input}\n")
-                sys.exit(1)
-            with in_path.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            records.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
+            with open(Path(args.input).expanduser(), "r", encoding="utf-8", errors="replace") as f:
+                records = [json.loads(line) for line in f if line.strip()]
 
-        result = evaluate_labeled_records(records, args.threshold)
-
-        if args.format == "json":
-            out_str = json.dumps(result, indent=2) + "\n"
-        else:
-            out_str = format_report_text(result) + "\n"
-
+        res = evaluate_labeled_records(records, args.threshold)
+        out_str = (json.dumps(res, indent=2) if args.format == "json" else format_report_text(res)) + "\n"
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:
                 f.write(out_str)
