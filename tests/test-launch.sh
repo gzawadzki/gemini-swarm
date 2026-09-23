@@ -10,6 +10,7 @@ set -uo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
 harness_fake herdr pi
 export HERDR_ENV=1
+unset HERDR_SWARM_STATE_DIR
 
 # --- throwaway repo ---------------------------------------------------------
 SRC="$T/repo"; mkdir -p "$SRC"
@@ -20,7 +21,7 @@ echo hello > "$SRC/file.txt"
 git -C "$SRC" add -A && git -C "$SRC" commit -qm init
 export FAKE_WORKTREE="$SRC"
 
-new_run_dir() { LAST_RUN_DIR="$T/run.$RANDOM"; LAST_STATE_DIR="$LAST_RUN_DIR/.herdr-swarm"; mkdir -p "$LAST_RUN_DIR"; }
+new_run_dir() { LAST_RUN_DIR="$T/run.$RANDOM"; LAST_STATE_DIR="$LAST_RUN_DIR/.herdr-swarm"; mkdir -p "$LAST_RUN_DIR"; export HERDR_SWARM_STATE_DIR="$LAST_STATE_DIR"; }
 
 run_launch() { # runs launch.sh in the dir prepared by new_run_dir
   local dir="$LAST_RUN_DIR"
@@ -31,12 +32,12 @@ run_launch() { # runs launch.sh in the dir prepared by new_run_dir
   "pitfalls":["file.txt is read by two callers; keep the trailing newline"],
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
-  ( cd "$dir" && : > "$HERDR_CALL_LOG" && HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" "$@" tasks.json 2>&1 )
+  ( cd "$dir" && : > "$HERDR_CALL_LOG" && HERDR_SWARM_STATE_DIR="$LAST_STATE_DIR" HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" "$@" tasks.json 2>&1 )
 }
 
 run_config() { # reads a tasks.json body on stdin, runs launch.sh against it
   cat > "$LAST_RUN_DIR/tasks.json"
-  ( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" "$@" tasks.json 2>&1 )
+  ( cd "$LAST_RUN_DIR" && : > "$HERDR_CALL_LOG" && HERDR_SWARM_STATE_DIR="$LAST_STATE_DIR" HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" "$@" tasks.json 2>&1 )
 }
 
 echo "== 1. pi launches with the Antigravity provider =="
@@ -249,7 +250,7 @@ grepok "brief still forbids restating"    "comments, docstrings"            "$(c
 
 echo
 echo "== 6. refuses to run outside a herdr pane =="
-out=$(cd "$T" && HERDR_ENV=0 bash "$REPO/scripts/launch.sh" /dev/null 2>&1); rc=$?
+out=$(cd "$T" && HERDR_SWARM_STATE_DIR="$T/.herdr-swarm" HERDR_ENV=0 bash "$REPO/scripts/launch.sh" /dev/null 2>&1); rc=$?
 check "exit code" "1" "$rc"
 grepok "says why" "not a herdr-managed pane" "$out"
 
@@ -264,7 +265,7 @@ cat > "$LAST_RUN_DIR/tasks.json" <<JSON
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
 : > "$HERDR_CALL_LOG"
-out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_ALLOW_UNSANDBOXED=0 bash "$REPO/scripts/launch.sh" tasks.json 2>&1); rc=$?
+out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_STATE_DIR="$LAST_STATE_DIR" HERDR_SWARM_ALLOW_UNSANDBOXED=0 bash "$REPO/scripts/launch.sh" tasks.json 2>&1); rc=$?
 check "exit code is non-zero" "1" "$rc"
 grepok "reports unsandboxed refusal" "Unattended worker execution is unsandboxed" "$out"
 grepok "mentions host access risks" "host files, network, and secrets" "$out"
@@ -286,7 +287,7 @@ cat > "$LAST_RUN_DIR/tasks.json" <<JSON
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
 : > "$HERDR_CALL_LOG"
-out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_ALLOW_UNSANDBOXED=0 bash "$REPO/scripts/launch.sh" --allow-unsandboxed tasks.json 2>&1); rc=$?
+out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_STATE_DIR="$LAST_STATE_DIR" HERDR_SWARM_ALLOW_UNSANDBOXED=0 bash "$REPO/scripts/launch.sh" --allow-unsandboxed tasks.json 2>&1); rc=$?
 check "exit code is zero with flag" "0" "$rc"
 grepok "announces unsandboxed execution via flag" "unsandboxed worker execution explicitly enabled" "$out"
 grepok "agent started via flag" "agent start t1" "$(cat "$HERDR_CALL_LOG")"
@@ -305,7 +306,7 @@ cat > "$LAST_RUN_DIR/tasks.json" <<JSON
   "ready_timeout_ms":1000,"work_budget_ms":900000}]}
 JSON
 : > "$HERDR_CALL_LOG"
-out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" tasks.json 2>&1); rc=$?
+out=$(cd "$LAST_RUN_DIR" && HERDR_SWARM_STATE_DIR="$LAST_STATE_DIR" HERDR_SWARM_ALLOW_UNSANDBOXED=1 bash "$REPO/scripts/launch.sh" tasks.json 2>&1); rc=$?
 check "exit code is zero" "0" "$rc"
 grepok "announces unsandboxed execution via env" "unsandboxed worker execution explicitly enabled" "$out"
 grepok "agent started" "agent start t1" "$(cat "$HERDR_CALL_LOG")"
