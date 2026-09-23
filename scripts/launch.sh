@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Launch one or more pi/gemini/codex sub-agents through herdr, each on its own
 # git worktree + branch, per a tasks.json config.
-# Usage: launch.sh [--trace] <tasks.json>
+# Usage: launch.sh [--trace] [--allow-unsandboxed] <tasks.json>
 set -euo pipefail
 
 # lib.sh is sourced before the positional arguments are read, because it owns
-# the --trace parsing that has to run first.
+# the flag parsing that has to run first.
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 TRACE_SRC="launch"
-strip_trace_flag "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
+strip_launch_flags "$@"; set -- ${ARGV[@]+"${ARGV[@]}"}
 trace_banner
 
-TASKS_FILE="${1:?Usage: launch.sh [--trace] <tasks.json>}"
+TASKS_FILE="${1:?Usage: launch.sh [--trace] [--allow-unsandboxed] <tasks.json>}"
 STATE_DIR="${HERDR_SWARM_STATE_DIR:-.herdr-swarm}"
 STATE_FILE="$STATE_DIR/state.json"
 
@@ -25,6 +25,19 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required." >&2; exit 1; }
 command -v herdr >/dev/null 2>&1 || { echo "ERROR: herdr not found on PATH." >&2; exit 1; }
 command -v git >/dev/null 2>&1 || { echo "ERROR: git is required." >&2; exit 1; }
 [[ -f "$TASKS_FILE" ]] || { echo "ERROR: $TASKS_FILE not found." >&2; exit 1; }
+
+if ! worker_unsandboxed_allowed; then
+  trace "-" "worker.security" "refused: unattended workers require explicit unsandboxed opt-in"
+  echo "ERROR: Unattended worker execution is unsandboxed on this platform." >&2
+  echo "Workers have unrestricted access to host files, network, and secrets." >&2
+  echo "Git worktrees and tool approval flags do not provide OS-level isolation." >&2
+  echo "Refusing to launch unattended workers without explicit operator opt-in." >&2
+  echo "To launch workers unsandboxed for this run, pass --allow-unsandboxed or set HERDR_SWARM_ALLOW_UNSANDBOXED=1." >&2
+  exit 1
+fi
+
+echo "swarm security: unsandboxed worker execution explicitly enabled for this run"
+trace "-" "worker.security" "unsandboxed execution explicitly enabled by operator"
 
 mkdir -p "$STATE_DIR" "$BRIEF_DIR"
 entries_file="$STATE_DIR/.entries.jsonl"
@@ -62,12 +75,15 @@ jq -n --arg run_id "$run_id" --arg tasks_file "$TASKS_FILE" \
       --arg skill_commit "$skill_head" --argjson skill_dirty "${skill_dirty:-0}" \
       --argjson skill_dirty_files "${skill_dirty_files:-[]}" \
       --arg skill_root "$skill_root" --argjson started_at "$(date +%s)" \
+      --arg worker_isolation "unsandboxed" \
+      --argjson allow_unsandboxed true \
       --argjson config "$(cat "$TASKS_FILE")" \
   '{run_id: $run_id, started_at: $started_at, tasks_file: $tasks_file,
     skill_commit: $skill_commit, skill_dirty: $skill_dirty,
     skill_dirty_files: $skill_dirty_files, skill_root: $skill_root,
+    worker_isolation: $worker_isolation, allow_unsandboxed: $allow_unsandboxed,
     config: $config}' > "$(run_meta_file)"
-trace "-" "run.meta" "$run_id skill=$skill_head dirty=${skill_dirty:-0}"
+trace "-" "run.meta" "$run_id skill=$skill_head dirty=${skill_dirty:-0} isolation=unsandboxed"
 
 n_tasks=$(jq '.tasks | length' "$TASKS_FILE")
 echo "Launching $n_tasks task(s) from $TASKS_FILE"

@@ -43,7 +43,7 @@ Create `tasks.json`:
 Then run:
 
 ```bash
-scripts/launch.sh tasks.json
+scripts/launch.sh --allow-unsandboxed tasks.json
 scripts/status.sh
 scripts/verify.sh fix-auth-bug
 scripts/critique.sh fix-auth-bug
