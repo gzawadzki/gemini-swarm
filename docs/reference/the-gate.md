@@ -59,9 +59,9 @@ A passing test suite says nothing about whether the agent did what it was asked.
 That question is what actually costs a full diff read, so `critique.sh` starts
 with a narrow Jev decision and escalates anything it cannot safely clear.
 
-### Jev automatic acceptance
+### Jev modes and automatic acceptance
 
-Jev runs only when `TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` is present. The
+Jev runs when `TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` is present. The
 TypeSafe route wins when both are set. The request asks separate Noul questions
 whose answers are probabilities that a bad condition is true:
 
@@ -73,20 +73,36 @@ whose answers are probabilities that a bad condition is true:
 - changed behavior lacks a reasonable regression test;
 - each declared pitfall is violated.
 
-Automatic acceptance requires every answer to be at or below
-`HERDR_SWARM_JEV_ACCEPT_MAX` (`0.10` by default). It also requires verify `pass`,
-a clean worktree, a complete diff, readable scope data, no strays, no oversize
-report, and no protected paths such as credentials, authorization, security,
-permissions, CODEOWNERS, CI workflows, or environment-secret files. These are
-hard preconditions, not additional model questions.
+Three operational modes are supported:
+
+- **`shadow` (default)**: Jev evaluates the typed risk questions and records the
+  signals and maximum risk in the verdict and state archive, but always passes
+  the diff through to the generative reviewer. Shadow mode remains the default
+  until a labeled local evaluation demonstrates an acceptable false-accept rate.
+- **`auto_accept` (explicit opt-in)**: allows Jev to approve verified, clean,
+  bounded diffs without starting a generative reviewer when every risk signal is
+  at or below `HERDR_SWARM_JEV_ACCEPT_MAX` (`0.10` by default). Opt in by setting
+  `HERDR_SWARM_JEV_MODE=auto_accept` or `HERDR_SWARM_JEV_AUTO_ACCEPT=1`.
+- **`disabled`**: skips Jev calls entirely (`HERDR_SWARM_JEV_MODE=disabled` or
+  `HERDR_SWARM_JEV_AUTO_ACCEPT=0`).
+
+Automatic acceptance requires explicit opt-in, verify `status == pass` AND
+verify `soundness == sound` (pass alone cannot authorize Jev, e.g. when soundness
+is disabled via `HERDR_SWARM_NO_SOUNDNESS=1`, unknown, or unsound), a clean
+worktree, a complete diff, readable scope data, no strays, no oversize report,
+and no protected paths such as credentials, authorization, security, permissions,
+CODEOWNERS, CI workflows, or environment-secret files. These are hard
+preconditions, not additional model questions.
 
 Malformed responses, request failures, high risk, missing keys, and failed
 preconditions all fall through to the generative reviewer. They do not create a
 false pass. The exact request and response are retained as
 `<name>.critique.jev-request.json` and `<name>.critique.jev-response.json`; the
-verdict records the route, model, threshold, maximum risk, and every signal.
-The API key is supplied through a permission-restricted temporary curl config,
-not the command line or trace.
+verdict records the mode (`shadow`, `auto_accept`, or `disabled`), route, model,
+threshold, maximum risk, and every signal. In shadow mode, `auto_accepted` is
+`false` and Jev risk signals are recorded alongside the generative reviewer's
+findings. The API key is supplied through a permission-restricted temporary curl
+config, not the command line or trace.
 
 ### Generative fallback
 
@@ -154,7 +170,8 @@ to leave the prompt unchanged. `~/.codex/AGENTS.md` still loads. Set
 |----------|---------|--------|
 | `TYPESAFE_API_KEY` | unset | use `https://api.typesafe.ai/v1/systemone`; preferred when both keys exist |
 | `OPENROUTER_API_KEY` | unset | use `https://openrouter.ai/api/alpha/decisions` when no TypeSafe key exists |
-| `HERDR_SWARM_JEV_AUTO_ACCEPT` | `1` | `0` disables the Jev path |
+| `HERDR_SWARM_JEV_MODE` | `shadow` | `shadow` records signals and sends diffs to generative review; `auto_accept` allows automatic pass; `disabled` skips Jev |
+| `HERDR_SWARM_JEV_AUTO_ACCEPT` | `0` | `1` explicitly opts in to automatic acceptance (`auto_accept`); `0` disables |
 | `HERDR_SWARM_JEV_ACCEPT_MAX` | `0.10` | maximum accepted probability for every bad-condition signal; must be in `[0, 0.5)` |
 | `HERDR_SWARM_JEV_MODEL` | route default | override `jev-latest` or `~typesafe/jev-latest` |
 | `HERDR_SWARM_JEV_TIMEOUT` | `60` | request timeout in seconds |
