@@ -48,6 +48,8 @@ out=$(verify); rc=$?
 check  "exit code"            "0"       "$rc"
 check  "status"               "pass"    "$(result .status)"
 check  "soundness recorded"   "sound"   "$(result .soundness)"
+check  "duration is numeric"  "number"  "$(result '.duration_s | type')"
+check  "duration is non-negative" "true" "$(result '.duration_s >= 0')"
 grepok "says where it resolved" "demo_pkg"  "$out"
 
 echo
@@ -66,6 +68,8 @@ grepok "names the module"     "demo_pkg"                 "$out"
 grepok "names where it resolved from" "main-checkout"    "$out"
 # An editable-install problem must not read as a broken test suite.
 check  "the detail is kept for later" "true" "$(result '.soundness_detail | test("main-checkout")')"
+check  "fail duration is numeric" "number" "$(result '.duration_s | type')"
+check  "fail duration is non-negative" "true" "$(result '.duration_s >= 0')"
 
 echo
 echo "== 3. soundness cannot be established: skipped, never a pass =="
@@ -78,6 +82,8 @@ check  "exit code"            "0"         "$rc"
 # something it did not check.
 check  "status"               "skipped"   "$(result .status)"
 check  "soundness recorded"   "unknown"   "$(result .soundness)"
+check  "skip duration is numeric" "number" "$(result '.duration_s | type')"
+check  "skip duration is non-negative" "true" "$(result '.duration_s >= 0')"
 
 echo
 echo "== 4. the escape hatch disables the check, visibly =="
@@ -108,6 +114,8 @@ write_state ""
 out=$(verify); rc=$?
 check  "exit code"            "0"         "$rc"
 check  "status"               "skipped"   "$(result .status)"
+check  "no-verify duration is numeric" "number" "$(result '.duration_s | type')"
+check  "no-verify duration is non-negative" "true" "$(result '.duration_s >= 0')"
 
 echo
 echo "== 7. a failing command whose code did resolve locally is the agent's problem =="

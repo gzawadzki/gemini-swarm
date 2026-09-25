@@ -10,6 +10,7 @@
 #
 # Usage: critique.sh [--trace] <task-name> [state.json]
 set -euo pipefail
+start_time=$SECONDS
 
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -77,6 +78,7 @@ write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
   jq -e . >/dev/null 2>&1 <<<"$checked" || checked='[]'
   local independent=true
   [[ -n "$worker_model" && "$reviewer_model" == "$worker_model" ]] && independent=false
+  local duration_s=$(( SECONDS - start_time ))
   jq -n --arg verdict "$1" --arg summary "$2" --argjson issues "$issues" \
         --arg model "$reviewer_model" --arg kind "$critique_kind" \
         --arg worker_model "$worker_model" --argjson independent "$independent" \
@@ -91,6 +93,7 @@ write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
         --argjson jev_signals "$jev_signals" \
         --arg jev_threshold "$JEV_ACCEPT_MAX" \
         --arg confidence "$confidence" --arg ts "$(date -u +%FT%TZ)" \
+        --argjson duration_s "$duration_s" \
     '{verdict: $verdict, confidence: $confidence, model: $model, kind: $kind,
       worker_model: $worker_model, independent: $independent,
       reviewer_verdict: $reviewer_verdict,
@@ -100,7 +103,7 @@ write_verdict() {  # verdict  summary  issues-json  pitfalls-checked-json
       mode: $jev_mode,
       jev: {mode: $jev_mode, attempted: $jev_attempted, route: $jev_route, model: $jev_model,
             risk_max: $jev_risk_max, threshold: $jev_threshold, signals: $jev_signals},
-      issues: $issues, summary: $summary, ran_at: $ts}' > "$critique_file"
+      issues: $issues, summary: $summary, ran_at: $ts, duration_s: $duration_s}' > "$critique_file"
   trace "$NAME" "verdict.write" "$1${confidence:+ (confidence: $confidence)} -> $critique_file"
 }
 
@@ -485,8 +488,18 @@ cmd=()
 reviewer_label="$critique_kind"
 case "$critique_kind" in
   pi)
-    mapfile -t pi_args < <(pi_model_args "$reviewer_model")
-    cmd=(pi -p --no-session "$autoflag" "${pi_args[@]}" "$instruction")
+    pi_bin="pi"
+    resolved_pi=$(command -v pi 2>/dev/null || true)
+    if [[ -n "$resolved_pi" ]]; then
+      pi_dir=$(dirname "$resolved_pi")
+      if [[ -f "$pi_dir/pi.exe" ]]; then
+        pi_bin="$pi_dir/pi.exe"
+      elif [[ -f "$pi_dir/pi.cmd" ]]; then
+        pi_bin="$pi_dir/pi.cmd"
+      fi
+    fi
+    mapfile -t pi_args < <(pi_model_args "$reviewer_model" "$CRITIQUE_EFFORT")
+    cmd=("$pi_bin" -p --no-session "$autoflag" "${pi_args[@]}" "$instruction")
     reviewer_label="pi / $reviewer_model"
     ;;
   codex)
