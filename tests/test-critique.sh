@@ -44,18 +44,47 @@ echo "== 1. task written by the critique model: reviewed by the alternate =="
 write_state "gemini-3.8-flash-high"
 out=$(critique); rc=$?
 check  "exit code on pass" "0" "$rc"
-grepok "pi ran on the alternate model"  "--model gemini-3.1-pro --thinking high" "$(cat "$CALL_LOG")"
+grepok "pi ran on the alternate model"  "--model gemini-3.1-pro --thinking medium" "$(cat "$CALL_LOG")"
 check  "verdict records reviewer"  "gemini-3.1-pro-high"   "$(verdict .model)"
 check  "verdict records worker"    "gemini-3.8-flash-high" "$(verdict .worker_model)"
 check  "verdict is independent"    "true"                  "$(verdict .independent)"
+check  "verdict duration is numeric" "number"              "$(verdict '.duration_s | type')"
+check  "verdict duration is non-negative" "true"           "$(verdict '.duration_s >= 0')"
 
 echo
 echo "== 2. task written by another model: default critique model =="
 write_state "gemini-3.1-pro-high"
 out=$(critique)
-grepok "pi ran on the default model"    "--model gemini-3.8-flash --thinking high" "$(cat "$CALL_LOG")"
+grepok "pi ran on the default model"    "--model gemini-3.8-flash --thinking medium" "$(cat "$CALL_LOG")"
 check  "verdict records reviewer"  "gemini-3.8-flash-high" "$(verdict .model)"
 check  "verdict is independent"    "true"                  "$(verdict .independent)"
+
+echo
+echo "== 2b. HERDR_SWARM_CRITIQUE_EFFORT=high overrides default effort =="
+write_state "gemini-3.1-pro-high"
+out=$(HERDR_SWARM_CRITIQUE_EFFORT=high critique)
+grepok "pi ran with high effort"        "--model gemini-3.8-flash --thinking high" "$(cat "$CALL_LOG")"
+
+echo
+echo "== 2c. sibling pi.exe is invoked when present =="
+SIBLING_BIN="$T/sibling-bin"; mkdir -p "$SIBLING_BIN"
+cat > "$SIBLING_BIN/pi" <<'FAKE'
+#!/usr/bin/env bash
+echo "shim $*" >> "$CALL_LOG"
+exit 1
+FAKE
+chmod +x "$SIBLING_BIN/pi"
+cat > "$SIBLING_BIN/pi.exe" <<'FAKE'
+#!/usr/bin/env bash
+echo "pi.exe $*" >> "$CALL_LOG"
+echo '{"verdict":"pass","confidence":"high","issues":[],"pitfalls_checked":[],"summary":"ok"}'
+FAKE
+chmod +x "$SIBLING_BIN/pi.exe"
+write_state "gemini-3.1-pro-high"
+out=$(PATH="$SIBLING_BIN:$PATH" critique); rc=$?
+check  "exit code with sibling exe" "0" "$rc"
+grepok "invoked sibling pi.exe"     "^pi.exe " "$(cat "$CALL_LOG")"
+rm -rf "$SIBLING_BIN"
 
 echo
 echo "== 3. codex reviewing a codex task: plugins off, flagged as not independent =="
@@ -350,7 +379,18 @@ check  "exit code"                     "0"            "$rc"
 check  "verdict is pass"               "pass"         "$(verdict .verdict)"
 check  "records automatic acceptance"  "true"         "$(verdict .auto_accepted)"
 check  "records mode is auto_accept"   "auto_accept"  "$(verdict .jev.mode)"
+check  "auto-accept duration is numeric" "number"     "$(verdict '.duration_s | type')"
 nogrep "does not start pi"             "^pi "         "$(cat "$CALL_LOG")"
+
+echo
+echo "== 7. empty diff records skipped with duration_s =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+git -C "$SRC" reset --hard "$base_sha" -q
+out=$(critique); rc=$?
+check  "exit code on skip"        "0"       "$rc"
+check  "verdict is skipped"       "skipped" "$(verdict .verdict)"
+check  "skipped duration is numeric" "number" "$(verdict '.duration_s | type')"
+check  "skipped duration is non-negative" "true" "$(verdict '.duration_s >= 0')"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

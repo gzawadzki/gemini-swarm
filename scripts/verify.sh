@@ -4,6 +4,7 @@
 # Claude tokens, so the human-in-the-loop read only ever sees diffs that pass.
 # Usage: verify.sh [--trace] <task-name> [state.json]
 set -euo pipefail
+start_time=$SECONDS
 
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -44,10 +45,12 @@ trace "$NAME" "cmd.resolve" \
   "${cmd:-<none>} (source: $([[ -n "$verify_from_task" ]] && echo "tasks.json" || echo "detected from $worktree_path"))"
 
 write_result() {  # status  cmd
+  local duration_s=$(( SECONDS - start_time ))
   jq -n --arg status "$1" --arg cmd "$2" --arg ts "$(date -u +%FT%TZ)" \
         --arg soundness "${SOUNDNESS:-}" --arg soundness_detail "${SOUNDNESS_DETAIL:-}" \
+        --argjson duration_s "$duration_s" \
     '{status: $status, cmd: $cmd, soundness: $soundness,
-      soundness_detail: $soundness_detail, ran_at: $ts}' > "$verify_file"
+      soundness_detail: $soundness_detail, ran_at: $ts, duration_s: $duration_s}' > "$verify_file"
 }
 
 if [[ -z "$cmd" ]]; then
