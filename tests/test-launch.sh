@@ -315,6 +315,32 @@ check "run.json records allow_unsandboxed" "true" "$(jq -r '.allow_unsandboxed' 
 check "state.json holds launched task" "t1" "$(jq -r '.[0].name' "$LAST_STATE_DIR/state.json")"
 
 echo
+echo "== 9. launches multiple tasks in start-then-prompt order =="
+new_run_dir
+out=$(run_config <<JSON
+{"tasks":[
+ {"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"first task","args":[],
+  "files":["file.txt"],"pitfalls":["trap 1"]},
+ {"name":"t2","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t2","prompt":"second task","args":[],
+  "files":["file.txt"],"pitfalls":["trap 2"]}
+]}
+JSON
+)
+grepok "starts first agent" "agent start t1" "$(cat "$HERDR_CALL_LOG")"
+grepok "starts second agent" "agent start t2" "$(cat "$HERDR_CALL_LOG")"
+first_prompt_line=$(grep -n 'agent prompt' "$HERDR_CALL_LOG" | head -1 | cut -d: -f1)
+last_start_line=$(grep -n 'agent start' "$HERDR_CALL_LOG" | tail -1 | cut -d: -f1)
+ordered="false"
+if [[ -n "$first_prompt_line" && -n "$last_start_line" ]] && (( last_start_line < first_prompt_line )); then
+  ordered="true"
+fi
+check "both starts appear before any prompt" "true" "$ordered"
+check "state records both tasks" "2" "$(jq 'length' "$LAST_STATE_DIR/state.json")"
+check "state preserves task order" "t1,t2" "$(jq -r '[.[].name] | join(",")' "$LAST_STATE_DIR/state.json")"
+
+echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
 rm -rf "$T"
 [[ "$fail" -eq 0 ]]

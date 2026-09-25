@@ -42,6 +42,11 @@ trace "-" "worker.security" "unsandboxed execution explicitly enabled by operato
 mkdir -p "$STATE_DIR" "$BRIEF_DIR"
 entries_file="$STATE_DIR/.entries.jsonl"
 : > "$entries_file"
+started_tasks=()
+started_names=()
+started_kinds=()
+started_brief_natives=()
+started_brief_files=()
 
 # Which version of this skill is about to run. The installed path is a junction
 # to the working repo, so an uncommitted half-rewrite executes live and a run that
@@ -338,32 +343,13 @@ BRIEF
     continue
   fi
   trace "$name" "agent.start" "started"
-
-  # `agent start` returns once the process exists, which is earlier than the TUI
-  # accepting input. Prompting in that window loses the prompt without an error:
-  # herdr answers agent_prompted, the agent never sees it, and the pane sits idle
-  # with an empty input box, looking exactly like a task nobody has reviewed yet.
-  echo "==> [$name] waiting for $kind to accept input"
-  ready=""
-  waited=0
-  for _ in $(seq 1 60); do
-    if agent_ready "$name"; then ready=1; break; fi
-    waited=$((waited + 1))
-    sleep 1
-  done
-  if [[ -n "$ready" ]]; then
-    trace "$name" "agent.ready" "interactive after ${waited}s"
-  else
-    trace "$name" "agent.ready" "still not interactive after 60s, sending anyway"
-    echo "WARN: [$name] still not interactive after 60s. Sending anyway." >&2
-  fi
-
-  echo "==> [$name] sending prompt (not waiting, runs in background)"
-  submit_prompt "$name" "Read the file $brief_native and carry out the task it describes in this worktree." \
-    || echo "ERROR: [$name] prompt was not picked up; resend it by hand. The brief is at $brief_file" >&2
-
+  started_names+=("$name")
+  started_kinds+=("$kind")
+  started_brief_natives+=("$brief_native")
+  started_brief_files+=("$brief_file")
   # An unset base is an empty string, not null, so `// "HEAD"` would not catch it.
-  jq -n --arg name "$name" --arg kind "$kind" --arg repo "$repo" --arg branch "$branch" \
+  started_tasks+=("$(jq -c -n \
+        --arg name "$name" --arg kind "$kind" --arg repo "$repo" --arg branch "$branch" \
         --arg base "${base:-HEAD}" --arg base_sha "$base_sha" \
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
@@ -372,16 +358,67 @@ BRIEF
         --arg brief_file "$brief_file" --argjson work_budget_ms "$work_budget_ms" \
         --argjson files "$(jq -c '.files' <<<"$task")" \
         --argjson pitfalls "$(jq -c '.pitfalls' <<<"$task")" \
-        --argjson started_at "$(date +%s)" \
     '{name: $name, kind: $kind, repo: $repo, branch: $branch, base: $base, base_sha: $base_sha,
       model: $model, effort: $effort, account: $account, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
       worktree_path: $worktree_path, status_file: $status_file, brief_file: $brief_file,
-      work_budget_ms: $work_budget_ms, started_at: $started_at, verify: $verify,
-      files: $files, pitfalls: $pitfalls, prompt: $prompt}' \
-    >> "$entries_file"
-  trace "$name" "state.write" "entry recorded"
+      work_budget_ms: $work_budget_ms, verify: $verify,
+      files: $files, pitfalls: $pitfalls, prompt: $prompt}')")
 done
+
+if (( ${#started_tasks[@]} > 0 )); then
+  for i in "${!started_tasks[@]}"; do
+    echo "==> [${started_names[$i]}] waiting for ${started_kinds[$i]} to accept input"
+  done
+
+  declare -a ready_flags=()
+  for i in "${!started_tasks[@]}"; do
+    ready_flags[i]=0
+  done
+
+  waited=0
+  for _ in $(seq 1 60); do
+    all_ready=1
+    for i in "${!started_tasks[@]}"; do
+      if [[ "${ready_flags[$i]}" != "1" ]]; then
+        name="${started_names[$i]}"
+        if agent_ready "$name"; then
+          ready_flags[i]=1
+          trace "$name" "agent.ready" "interactive after ${waited}s"
+        else
+          all_ready=0
+        fi
+      fi
+    done
+    if (( all_ready == 1 )); then
+      break
+    fi
+    waited=$((waited + 1))
+    sleep 1
+  done
+
+  for i in "${!started_tasks[@]}"; do
+    if [[ "${ready_flags[$i]}" != "1" ]]; then
+      name="${started_names[$i]}"
+      trace "$name" "agent.ready" "still not interactive after 60s, sending anyway"
+      echo "WARN: [$name] still not interactive after 60s. Sending anyway." >&2
+    fi
+  done
+
+  for i in "${!started_tasks[@]}"; do
+    name="${started_names[$i]}"
+    brief_native="${started_brief_natives[$i]}"
+    brief_file="${started_brief_files[$i]}"
+    entry="${started_tasks[$i]}"
+
+    echo "==> [$name] sending prompt (not waiting, runs in background)"
+    submit_prompt "$name" "Read the file $brief_native and carry out the task it describes in this worktree." \
+      || echo "ERROR: [$name] prompt was not picked up; resend it by hand. The brief is at $brief_file" >&2
+
+    jq -c --argjson started_at "$(date +%s)" '. + {started_at: $started_at}' <<<"$entry" >> "$entries_file"
+    trace "$name" "state.write" "entry recorded"
+  done
+fi
 
 jq -s '.' "$entries_file" > "$STATE_FILE"
 rm -f "$entries_file"
