@@ -84,8 +84,8 @@ echo "=== $NAME ==="
 echo "agent:     $kind${model:+ / $model}${effort:+ / $effort}"
 if [[ -n "$fallback_from" ]]; then
   echo "fallback:  legacy run on codex instead of $fallback_from"
-elif [[ -n "$account" && "$account" != "a" ]]; then
-  echo "account:   ${account^^} (the other Antigravity subscription; account A was at 0% at launch)"
+elif [[ -n "$account" ]]; then
+  echo "account:   ${account^^}"
 fi
 echo "verify:    $verify_status${verify_cmd:+ ($verify_cmd)}"
 if [[ "$verify_status" == "not run" ]]; then

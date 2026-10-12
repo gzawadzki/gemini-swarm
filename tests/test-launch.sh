@@ -8,7 +8,7 @@
 set -uo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness.sh"
-harness_fake herdr pi
+harness_fake herdr pi node
 export HERDR_ENV=1
 unset HERDR_SWARM_STATE_DIR
 
@@ -48,7 +48,7 @@ out=$(run_launch)
 grepok "reports the skill's commit"        "swarm skill: [0-9a-f]"           "$out"
 grepok "starts the agent"                 "starting pi agent" "$out"
 grepok "sends the prompt"                 "sending prompt"                  "$out"
-check  "state.json leaves account to Pi" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
+check  "state.json pins preflight account" "a" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
 check  "state.json records the branch" "agent/t1" "$(jq -r '.[0].branch' "$LAST_STATE_DIR/state.json")"
 # cleanup.sh needs the origin repo to tell whether a task branch was merged.
 # jq is a native binary, so MSYS rewrites a /tmp/... argument into its Windows
@@ -102,7 +102,7 @@ grepok "selects Antigravity" "--provider antigravity" "$(cat "$HERDR_CALL_LOG")"
 grepok "normalizes model" "--model gemini-3.1-pro" "$(cat "$HERDR_CALL_LOG")"
 grepok "sets thinking" "--thinking high" "$(cat "$HERDR_CALL_LOG")"
 grepok "approves local project files" "--approve" "$(cat "$HERDR_CALL_LOG")"
-check "pi account stays managed by the provider" "" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
+check "pi starts on the quota-checked account" "a" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
 
 echo
 echo "== 2b. the Luna route starts Codex at xhigh =="
@@ -313,6 +313,64 @@ grepok "agent started" "agent start t1" "$(cat "$HERDR_CALL_LOG")"
 check "run.json records worker isolation" "unsandboxed" "$(jq -r '.worker_isolation' "$LAST_STATE_DIR/run.json")"
 check "run.json records allow_unsandboxed" "true" "$(jq -r '.allow_unsandboxed' "$LAST_STATE_DIR/run.json")"
 check "state.json holds launched task" "t1" "$(jq -r '.[0].name' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 9. multi-task wave round-robins accounts and honors explicit account =="
+new_run_dir
+out=$(run_config <<JSON
+{"tasks":[
+ {"name":"t1","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t1","prompt":"do thing 1","args":[],
+  "files":["file.txt"],"pitfalls":["trap 1"]},
+ {"name":"t2","kind":"pi","model":"gemini-3.8-flash-high","repo":"$SRC",
+  "branch":"agent/t2","prompt":"do thing 2","args":[],
+  "files":["file.txt"],"pitfalls":["trap 2"]},
+ {"name":"t3","kind":"pi","model":"gemini-3.8-flash-high","account":"b","repo":"$SRC",
+  "branch":"agent/t3","prompt":"do thing 3","args":[],
+  "files":["file.txt"],"pitfalls":["trap 3"]}
+]}
+JSON
+)
+check "task 1 round-robins to account a" "a" "$(jq -r '.[0].account' "$LAST_STATE_DIR/state.json")"
+check "task 2 round-robins to account b" "b" "$(jq -r '.[1].account' "$LAST_STATE_DIR/state.json")"
+check "task 3 honors explicit account b" "b" "$(jq -r '.[2].account' "$LAST_STATE_DIR/state.json")"
+
+echo
+echo "== 10. quota blocks before creating any worktree =="
+new_run_dir
+export FAKE_QUOTA_PLAN='{"tasks":[{"status":"blocked","reason":"b: Quota exhausted; reset 2030-01-01T00:00:00Z"}]}'
+out=$(run_launch); rc=$?
+check "blocked wave exits non-zero" "1" "$rc"
+grepok "shows quota and reset" "Quota exhausted; reset 2030" "$out"
+check "no worker pane created" "" "$(grep 'worktree create' "$HERDR_CALL_LOG" || true)"
+check "no agent started" "" "$(grep 'agent start' "$HERDR_CALL_LOG" || true)"
+check "no launched entries" "0" "$(jq length "$LAST_STATE_DIR/state.json")"
+check "quota decision recorded" "blocked" "$(jq -r '.tasks[0].status' "$LAST_STATE_DIR/quota.json")"
+
+echo
+echo "== 11. unavailable preflight fails closed =="
+new_run_dir
+unset FAKE_QUOTA_PLAN
+out=$(FAKE_QUOTA_RC=1 run_launch); rc=$?
+check "failed lookup exits non-zero" "1" "$rc"
+grepok "reports unavailable preflight" "Quota preflight unavailable" "$out"
+check "lookup failure creates no worker" "" "$(grep 'worktree create' "$HERDR_CALL_LOG" || true)"
+
+echo
+echo "== 12. routes both automatic tasks to the available account =="
+new_run_dir
+export FAKE_QUOTA_PLAN='{"tasks":[{"status":"ready","account":"a","accountId":"account-a"},{"status":"ready","account":"a","accountId":"account-a"}]}'
+out=$(run_config <<JSON
+{"tasks":[
+ {"name":"t1","kind":"pi","repo":"$SRC","prompt":"test","files":["file.txt"],"pitfalls":[]},
+ {"name":"t2","kind":"pi","repo":"$SRC","prompt":"test","files":["file.txt"],"pitfalls":[]}
+]}
+JSON
+)
+check "both assignments are A" "a,a" "$(jq -r 'map(.account) | join(",")' "$LAST_STATE_DIR/state.json")"
+grepok "injects stable account identity" "ANTIGRAVITY_ACCOUNT='account-a'" "$(cat "$HERDR_CALL_LOG")"
+check "state keeps stable identity" "account-a" "$(jq -r '.[0].account_id' "$LAST_STATE_DIR/state.json")"
+unset FAKE_QUOTA_PLAN
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

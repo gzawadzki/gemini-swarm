@@ -142,6 +142,22 @@ esac
 FAKE
 }
 
+# Only launch tests install this fake; no live credentials or network are read.
+_harness_fake_node() {
+  cat > "$BIN/node" <<'FAKE'
+#!/usr/bin/env bash
+echo "node $*" >> "$CALL_LOG"
+if [[ "${FAKE_QUOTA_RC:-0}" != "0" ]]; then exit "$FAKE_QUOTA_RC"; fi
+if [[ -n "${FAKE_QUOTA_PLAN:-}" ]]; then
+  printf '%s\n' "$FAKE_QUOTA_PLAN"
+else
+  jq '{fetchedAt: 1, tasks: [.tasks | to_entries[] |
+    {status:"ready", account: (.value.account // (if (.key % 2) == 0 then "a" else "b" end)),
+     accountId: (.value.account // (if (.key % 2) == 0 then "a" else "b" end))}]}' "$2"
+fi
+FAKE
+}
+
 _harness_fake_pi() {
   cat > "$BIN/pi" <<'FAKE'
 #!/usr/bin/env bash

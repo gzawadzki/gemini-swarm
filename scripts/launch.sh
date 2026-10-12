@@ -89,6 +89,25 @@ n_tasks=$(jq '.tasks | length' "$TASKS_FILE")
 echo "Launching $n_tasks task(s) from $TASKS_FILE"
 trace "-" "run.start" "$n_tasks task(s) from $TASKS_FILE"
 
+quota_file="$STATE_DIR/quota.json"
+quota_failed=0
+if jq -e 'any(.tasks[]; .kind == "pi" and ((.model // "antigravity/default") | (contains("/") | not) or startswith("antigravity/")))' "$TASKS_FILE" >/dev/null; then
+  echo "Checking Antigravity quota before opening worker panes"
+  pi_bin=$(command -v pi || true)
+  quota_script="$skill_root/scripts/quota-preflight.mjs"
+  quota_tasks="$TASKS_FILE"
+  if command -v cygpath >/dev/null 2>&1; then
+    quota_script=$(cygpath -m "$quota_script")
+    quota_tasks=$(cygpath -m "$TASKS_FILE")
+    [[ -z "$pi_bin" ]] || pi_bin=$(cygpath -m "$pi_bin")
+  fi
+  if ! node "$quota_script" "$quota_tasks" "$pi_bin" > "$quota_file" ||
+     ! jq -e --argjson count "$n_tasks" '.tasks | type == "array" and length == $count' "$quota_file" >/dev/null 2>&1; then
+    echo "ERROR: Quota preflight unavailable; Antigravity tasks will not start" >&2
+    jq -n --argjson count "$n_tasks" '{tasks: [range($count) | {status:"blocked", reason:"Quota preflight unavailable"}]}' > "$quota_file"
+  fi
+fi
+
 for i in $(seq 0 $((n_tasks - 1))); do
   task=$(jq -c ".tasks[$i]" "$TASKS_FILE")
   name=$(jq -r '.name' <<<"$task")
@@ -175,15 +194,28 @@ for i in $(seq 0 $((n_tasks - 1))); do
     effort=""
   fi
 
-  # pi-antigravity manages linked accounts and retries the next one on a hard
-  # quota wall. There is no shared agy credential to swap before launch.
   fallback_from=""
   account=""
+  account_id=""
+  if [[ "$kind" == "pi" && -f "$quota_file" ]] && [[ "$model" != */* || "$model" == antigravity/* ]]; then
+    quota_status=$(jq -r ".tasks[$i].status // \"blocked\"" "$quota_file")
+    if [[ "$quota_status" != "ready" ]]; then
+      quota_reason=$(jq -r ".tasks[$i].reason // \"Quota status unknown\"" "$quota_file")
+      echo "ERROR: [$name] quota blocked: $quota_reason. No worker opened." >&2
+      trace "$name" "quota.blocked" "$quota_reason"
+      quota_failed=1
+      continue
+    fi
+    account=$(jq -r ".tasks[$i].account" "$quota_file")
+    account_id=$(jq -r ".tasks[$i].accountId" "$quota_file")
+    trace "$name" "quota.ready" "account=$account id=$account_id"
+  fi
+
   if [[ "$kind" == "agy" ]]; then
     echo "ERROR: [$name] kind 'agy' was replaced by 'pi'. Update the task config and relaunch. Skipping." >&2
     continue
   fi
-  [[ -n "$fallback_from" ]] || trace "$name" "kind.resolve" "$kind ${model:-default}${effort:+ / $effort} (no fallback)"
+  [[ -n "$fallback_from" ]] || trace "$name" "kind.resolve" "$kind ${model:-default}${effort:+ / $effort} account=${account:-default} (no fallback)"
 
   model_args=()
   case "$kind" in
@@ -313,6 +345,46 @@ status is "success" or "failure", tests_passed is true or false. Create parent
 directories if needed. Write it as your very last action, once the tree is clean.
 BRIEF
 
+  # Herdr's Windows PowerShell pane calls Start-Process -FilePath pi. If a POSIX
+  # extensionless pi shim shadows pi.cmd, Windows cannot execute it (error 193).
+  # Prepend a pane-local .cmd wrapper; leave the user's Pi installation and
+  # global PATH untouched. Also inject ANTIGRAVITY_ACCOUNT when specified or round-robined.
+  if [[ "$kind" == pi ]]; then
+    setup_cmds=()
+    if command -v cygpath >/dev/null 2>&1; then
+      pi_bin=$(command -v pi || true)
+      if [[ -n "$pi_bin" && -f "$pi_bin.cmd" ]] && [[ "$(head -c 2 "$pi_bin")" == '#!' ]]; then
+        wrapper_dir="$BRIEF_DIR/pi-windows-bin"
+        mkdir -p "$wrapper_dir"
+        pi_cmd_native=$(cygpath -w "$pi_bin.cmd")
+        printf '@echo off\r\ncall "%s" %%*\r\n' "$pi_cmd_native" > "$wrapper_dir/pi.cmd"
+        wrapper_native=$(cygpath -w "$wrapper_dir")
+        # PowerShell single quotes in a path are doubled inside a quoted literal.
+        wrapper_native=${wrapper_native//\'/\'\'}
+        setup_cmds+=("\$env:PATH='${wrapper_native};' + \$env:PATH;")
+      fi
+      if [[ -n "$account" ]]; then
+        selector=${account_id:-$account}
+        selector=${selector//\'/\'\'}
+        setup_cmds+=("\$env:ANTIGRAVITY_ACCOUNT='${selector}';")
+      fi
+    elif [[ -n "$account" ]]; then
+      printf -v selector '%q' "${account_id:-$account}"
+      setup_cmds+=("export ANTIGRAVITY_ACCOUNT=${selector};")
+    fi
+
+    if (( ${#setup_cmds[@]} > 0 )); then
+      if command -v cygpath >/dev/null 2>&1; then
+        setup_str="${setup_cmds[*]} Write-Output '__PI_PANE_READY__'"
+      else
+        setup_str="${setup_cmds[*]} printf '%s\\n' '__PI_PANE_READY__'"
+      fi
+      trace "$name" "pi.pane-setup" "configuring pane environment (account=${account:-default})"
+      herdr pane run "$pane_id" "$setup_str" >/dev/null
+      herdr pane wait-output "$pane_id" --match '__PI_PANE_READY__' --timeout 10000 >/dev/null
+    fi
+  fi
+
   # Pi's Antigravity provider handles linked-account rotation within the agent.
   echo "==> [$name] starting $kind agent${account:+ on account $account} in pane $pane_id${model:+ (model: $model${effort:+ / $effort})}"
   # One agent failing to start must not abandon the tasks after it, and it must
@@ -367,14 +439,14 @@ BRIEF
         --arg base "${base:-HEAD}" --arg base_sha "$base_sha" \
         --arg pane_id "$pane_id" --arg workspace_id "$workspace_id" \
         --arg worktree_path "$worktree_path" --arg status_file "$status_file" \
-        --arg model "$model" --arg effort "$effort" --arg account "$account" \
+        --arg model "$model" --arg effort "$effort" --arg account "$account" --arg account_id "$account_id" \
         --arg fallback_from "$fallback_from" --arg verify "$verify" --arg prompt "$prompt" \
         --arg brief_file "$brief_file" --argjson work_budget_ms "$work_budget_ms" \
         --argjson files "$(jq -c '.files' <<<"$task")" \
         --argjson pitfalls "$(jq -c '.pitfalls' <<<"$task")" \
         --argjson started_at "$(date +%s)" \
     '{name: $name, kind: $kind, repo: $repo, branch: $branch, base: $base, base_sha: $base_sha,
-      model: $model, effort: $effort, account: $account, fallback_from: $fallback_from,
+      model: $model, effort: $effort, account: $account, account_id: $account_id, fallback_from: $fallback_from,
       pane_id: $pane_id, workspace_id: $workspace_id,
       worktree_path: $worktree_path, status_file: $status_file, brief_file: $brief_file,
       work_budget_ms: $work_budget_ms, started_at: $started_at, verify: $verify,
@@ -393,3 +465,4 @@ echo "Run id: $run_id (cleanup.sh archives this run under $RUN_DIR)"
 echo "Briefs: $BRIEF_DIR"
 echo "Check on them with: scripts/status.sh"
 if trace_enabled; then echo "Trace of this run: $(trace_file)"; fi
+exit "$quota_failed"

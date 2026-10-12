@@ -1,0 +1,389 @@
+diff --git a/src/auth/accounts.ts b/src/auth/accounts.ts
+index dce7c21..d0d8607 100644
+--- a/src/auth/accounts.ts
++++ b/src/auth/accounts.ts
+@@ -1,15 +1,34 @@
+ import { createHash } from "node:crypto";
+-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
++import { chmodSync, closeSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+ import { homedir } from "node:os";
+ import { join } from "node:path";
+ import type { OAuthCredentials } from "@earendil-works/pi-ai";
+ import { defaultProjectId } from "../client/client.js";
++import { antigravityEnv } from "../utils/util.js";
+ import type { AntigravityApiKey, AntigravityOAuthCredentials } from "../types/types.js";
+ import { refreshAntigravityToken } from "./oauth.js";
+ 
+ const ACCOUNTS_FILE = "antigravity-accounts.json";
+ const AUTH_FILE = "auth.json";
+ const REFRESH_SKEW_MS = 5 * 60 * 1000;
++let processAccountSelector: string | undefined;
++let previousEnvSelector: string | undefined;
++const processAccounts = new Map<string, StoredAccount>();
++const heldRefreshLocks = new Set<string>();
++process.once("exit", () => {
++  for (const path of heldRefreshLocks) {
++    try { unlinkSync(path); } catch { /* already released */ }
++  }
++});
++
++function effectiveAccountSelector(): string | undefined {
++  const selector = antigravityEnv("ACCOUNT") || process.env.PI_ANTIGRAVITY_ACCOUNT;
++  if (selector !== previousEnvSelector) {
++    previousEnvSelector = selector;
++    processAccountSelector = selector;
++  }
++  return processAccountSelector;
++}
+ 
+ export type StoredAccount = AntigravityOAuthCredentials & {
+   accountId: string;
+@@ -141,7 +160,7 @@ function findAccount(
+   );
+ }
+ 
+-function findAccountId(store: AccountsFile, selector: string): string | undefined {
++export function findAccountId(store: AccountsFile, selector: string): string | undefined {
+   const normalized = selector.trim().toLowerCase();
+   if (!normalized) return undefined;
+   const entries = sortedAccounts(store);
+@@ -150,6 +169,8 @@ function findAccountId(store: AccountsFile, selector: string): string | undefine
+     if (index >= 1 && index <= entries.length) return entries[index - 1]?.accountId;
+     return undefined;
+   }
++  if ((normalized === "a" || normalized === "acc1") && entries.length >= 1) return entries[0]?.accountId;
++  if ((normalized === "b" || normalized === "acc2") && entries.length >= 2) return entries[1]?.accountId;
+   return entries.find(
+     (account) =>
+       account.accountId.toLowerCase() === normalized ||
+@@ -257,9 +278,95 @@ function apiKeyFor(account: StoredAccount): AntigravityApiKey {
+   return {
+     token: account.access,
+     projectId: account.projectId || defaultProjectId(email || "antigravity-default"),
++    accountId: account.accountId,
+   };
+ }
+ 
++export function getAccountApiKeySync(selector: string): AntigravityApiKey | undefined {
++  const store = loadAccountStore();
++  const accountId = findAccountId(store, selector);
++  if (!accountId) return undefined;
++  const existing = processAccounts.get(accountId) || store.accounts[accountId];
++  if (!existing) return undefined;
++  return apiKeyFor(existing);
++}
++
++async function refreshStoredAccount(accountId: string): Promise<StoredAccount> {
++  const lockPath = `${accountsPath()}.refresh.lock`;
++  const deadline = Date.now() + 15000;
++  let fd: number;
++  for (;;) {
++    try {
++      fd = openSync(lockPath, "wx", 0o600);
++      heldRefreshLocks.add(lockPath);
++      break;
++    } catch (error) {
++      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
++      if (Date.now() >= deadline) throw new Error("Antigravity credential refresh lock timed out");
++      await new Promise((resolve) => setTimeout(resolve, 100));
++    }
++  }
++  try {
++    writeFileSync(fd, `${process.pid}\n`);
++    const store = loadAccountStore();
++    const existing = store.accounts[accountId];
++    if (!existing) throw new Error(`Antigravity account not found: ${accountId}`);
++    const account = await ensureFresh(existing);
++    if (account.access !== existing.access || account.expires !== existing.expires) {
++      // Keep the global active account and auth.json unchanged.
++      const latest = loadAccountStore();
++      if (!latest.accounts[accountId]) throw new Error(`Antigravity account removed: ${accountId}`);
++      latest.accounts[accountId] = account;
++      saveAccountStore(latest);
++    }
++    return account;
++  } finally {
++    closeSync(fd);
++    unlinkSync(lockPath);
++    heldRefreshLocks.delete(lockPath);
++  }
++}
++
++export async function resolveAccountApiKey(
++  selector: string,
++): Promise<AntigravityApiKey | undefined> {
++  const store = loadAccountStore();
++  const accountId = findAccountId(store, selector);
++  if (!accountId) return undefined;
++  const existing = processAccounts.get(accountId) || store.accounts[accountId];
++  if (!existing) return undefined;
++  const account = existing.access && existing.expires > Date.now() + REFRESH_SKEW_MS
++    ? existing
++    : await refreshStoredAccount(accountId);
++  processAccounts.set(accountId, account);
++  return apiKeyFor(account);
++}
++
++export async function resolveProcessAccountApiKey(): Promise<AntigravityApiKey | undefined> {
++  const selector = effectiveAccountSelector();
++  if (!selector) return undefined;
++  const key = await resolveAccountApiKey(selector);
++  if (!key) throw new Error(`Antigravity account not found: ${selector}`);
++  return key;
++}
++
++export function getApiKey(credentials: OAuthCredentials): string {
++  const selector = effectiveAccountSelector();
++  if (selector) {
++    const custom = getAccountApiKeySync(selector);
++    if (!custom) throw new Error(`Antigravity account not found: ${selector}`);
++    return JSON.stringify(custom);
++  }
++  const email = (credentials as AntigravityOAuthCredentials).email?.trim();
++  return JSON.stringify({
++    token: credentials.access,
++    accountId: findAccount(loadAccountStore(), credentials)?.accountId,
++    projectId:
++      (credentials as AntigravityOAuthCredentials).projectId ||
++      defaultProjectId(email || "antigravity-default"),
++  });
++}
++
+ export async function activateAccount(selector: string): Promise<StoredAccount> {
+   syncCurrentAuth();
+   const store = loadAccountStore();
+@@ -273,6 +380,9 @@ export async function activateAccount(selector: string): Promise<StoredAccount>
+   store.activeAccountId = account.accountId;
+   saveAccountStore(store);
+   writeActiveCredential(account);
++  previousEnvSelector = antigravityEnv("ACCOUNT") || process.env.PI_ANTIGRAVITY_ACCOUNT;
++  processAccountSelector = account.accountId;
++  processAccounts.set(account.accountId, account);
+   return account;
+ }
+ 
+@@ -298,29 +408,25 @@ export async function removeAccount(selector: string): Promise<StoredAccount | u
+ }
+ 
+ /**
+- * Switch to the next stored account that has not already been tried in this request.
+- * Used when Antigravity returns a hard quota wall (HTTP 429).
++ * A hard quota wall switches this process, never the globally active account.
++ * Stable account IDs bound retries even when another worker refreshes a token.
+  */
+ export async function failoverToNextAccount(
+-  triedAccessTokens: ReadonlySet<string>,
++  triedAccounts: ReadonlySet<string>,
+ ): Promise<AntigravityApiKey | undefined> {
+-  syncCurrentAuth();
+-  const store = loadAccountStore();
+-  const candidates = sortedAccounts(store).filter(
+-    (account) => !triedAccessTokens.has(account.access),
++  const candidates = sortedAccounts(loadAccountStore()).filter(
++    (account) => !triedAccounts.has(account.accountId) && !triedAccounts.has(account.access),
+   );
+   for (const candidate of candidates) {
+     try {
+-      const account = await ensureFresh(candidate);
+-      if (!account.access || triedAccessTokens.has(account.access)) continue;
+-      account.lastUsedAt = Date.now();
+-      store.accounts[account.accountId] = account;
+-      store.activeAccountId = account.accountId;
+-      saveAccountStore(store);
+-      writeActiveCredential(account);
+-      return apiKeyFor(account);
++      const key = await resolveAccountApiKey(candidate.accountId);
++      if (!key?.token || triedAccounts.has(key.token)) continue;
++      // Initialize the ENV snapshot before saving the sticky local selection.
++      effectiveAccountSelector();
++      processAccountSelector = candidate.accountId;
++      return key;
+     } catch {
+-      // Skip accounts whose refresh token is no longer valid.
++      // Skip accounts whose credentials cannot be refreshed.
+     }
+   }
+   return undefined;
+diff --git a/src/auth/index.ts b/src/auth/index.ts
+index 67b6f8b..09f0ec1 100644
+--- a/src/auth/index.ts
++++ b/src/auth/index.ts
+@@ -1,7 +1,6 @@
+ export {
+   loginAntigravity,
+   refreshAntigravityToken,
+-  getApiKey,
+   CLIENT_ID,
+   CLIENT_SECRET,
+   REDIRECT_URI,
+@@ -15,9 +14,15 @@ export type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth.js";
+ export {
+   activateAccount,
+   failoverToNextAccount,
++  findAccountId,
++  getAccountApiKeySync,
++  getApiKey,
+   listAccounts,
++  loadAccountStore,
+   rememberAccount,
+   removeAccount,
++  resolveAccountApiKey,
++  resolveProcessAccountApiKey,
+   updateRememberedAccount,
+ } from "./accounts.js";
+ export type { AccountSummary, StoredAccount } from "./accounts.js";
+diff --git a/src/client/client.ts b/src/client/client.ts
+index 01509a9..d64eb31 100644
+--- a/src/client/client.ts
++++ b/src/client/client.ts
+@@ -96,7 +96,7 @@ export function parseApiKey(apiKeyRaw: string | undefined): AntigravityApiKey {
+   try {
+     const parsed = JSON.parse(apiKeyRaw) as Partial<AntigravityApiKey>;
+     if (!parsed.token || !parsed.projectId) throw new Error("missing token or projectId");
+-    return { token: parsed.token, projectId: parsed.projectId };
++    return { token: parsed.token, projectId: parsed.projectId, accountId: parsed.accountId };
+   } catch (error) {
+     throw new Error(
+       `Invalid Antigravity credentials. Run /login antigravity. (${safeError(error)})`,
+diff --git a/src/stream/stream.ts b/src/stream/stream.ts
+index c44e227..4f20625 100644
+--- a/src/stream/stream.ts
++++ b/src/stream/stream.ts
+@@ -12,7 +12,7 @@ import {
+ } from "@earendil-works/pi-ai";
+ // Namespace import: transcript helpers exist on pi-ai >= 0.86; resolved at runtime.
+ import * as piAi from "@earendil-works/pi-ai";
+-import { failoverToNextAccount } from "../auth/accounts.js";
++import { failoverToNextAccount, resolveProcessAccountApiKey } from "../auth/accounts.js";
+ import {
+   antigravityHeaders,
+   endpointCandidates,
+@@ -1479,7 +1479,9 @@ export function streamAntigravity(
+     const output = createOutput(model);
+     try {
+       let creds = parseApiKey(opts.apiKey);
+-      const triedAccessTokens = new Set<string>([creds.token]);
++      const resolved = await resolveProcessAccountApiKey();
++      if (resolved) creds = resolved;
++      const triedAccounts = new Set<string>([creds.accountId || creds.token]);
+       const primaryEndpoint = endpointCandidates()[0];
+       if (primaryEndpoint) prewarmConnection(primaryEndpoint);
+       // Skip loadCodeAssist roundtrip when credentials already carry a projectId.
+@@ -1616,9 +1618,9 @@ export function streamAntigravity(
+           }
+           const friendly = friendlyAntigravityError(response?.status, lastText);
+           if (response?.status === 429 && /Quota reached\./i.test(friendly)) {
+-            const next = await failoverToNextAccount(triedAccessTokens);
++            const next = await failoverToNextAccount(triedAccounts);
+             if (next) {
+-              triedAccessTokens.add(next.token);
++              triedAccounts.add(next.accountId || next.token);
+               creds = next;
+               requestHeaders = antigravityHeaders(creds.token);
+               const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+diff --git a/src/types/types.ts b/src/types/types.ts
+index b50fcbe..d0822b9 100644
+--- a/src/types/types.ts
++++ b/src/types/types.ts
+@@ -17,6 +17,7 @@ export type AntigravityOAuthCredentials = OAuthCredentials & {
+ export type AntigravityApiKey = {
+   token: string;
+   projectId: string;
++  accountId?: string;
+ };
+ 
+ export type DynamicModelInfo = {
+@@ -183,7 +184,7 @@ export type QuotaBucket = {
+   window?: string;
+   resetTime?: string;
+   description?: string;
+-  remainingFraction: number;
++  remainingFraction?: number;
+ };
+ 
+ export type QuotaGroup = {
+diff --git a/src/usage/quota.ts b/src/usage/quota.ts
+new file mode 100644
+index 0000000..236b0ca
+--- /dev/null
++++ b/src/usage/quota.ts
+@@ -0,0 +1,48 @@
++import type { AccountUsage } from "../types/types.js";
++
++export type QuotaAvailability = {
++  status: "available" | "exhausted" | "unknown";
++  reason: string;
++  remainingFraction?: number;
++  resetTime?: string;
++};
++
++/** Check the exact runtime model and all reported limits in its shared pool. */
++export function assessModelQuota(usage: AccountUsage, runtimeModel: string): QuotaAvailability {
++  const model = usage.models.find((row) => row.modelId === runtimeModel);
++  if (!model) return { status: "unknown", reason: `Model ${runtimeModel} not reported` };
++
++  const pool = /^gemini-/i.test(runtimeModel)
++    ? /gemini/i
++    : /^(claude-|gpt-oss-)/i.test(runtimeModel)
++      ? /claude|gpt.?oss/i
++      : undefined;
++  const groups = pool ? usage.groups.filter((group) => pool.test(group.displayName)) : [];
++  const limits = [model, ...groups.flatMap((group) => group.buckets)];
++  const exhausted = limits.filter((limit) => limit.remainingFraction === 0);
++  if (exhausted.length) {
++    // Every exhausted window must reset before this account can become eligible.
++    const resets = exhausted.map((limit) => limit.resetTime).filter(
++      (value): value is string => !!value && Number.isFinite(Date.parse(value)),
++    );
++    const resetTime = resets.length === exhausted.length
++      ? resets.sort((a, b) => Date.parse(b) - Date.parse(a))[0]
++      : undefined;
++    return { status: "exhausted", reason: "Quota exhausted", remainingFraction: 0, resetTime };
++  }
++  if (usage.quotaSummaryError && !/SUBSCRIPTION_REQUIRED|#3501|(?:lack|missing).*license/i.test(usage.quotaSummaryError)) {
++    return { status: "unknown", reason: "Aggregate quota lookup unavailable" };
++  }
++  if (limits.some((limit) => typeof limit.remainingFraction !== "number" ||
++      !Number.isFinite(limit.remainingFraction) || limit.remainingFraction < 0 || limit.remainingFraction > 1)) {
++    return { status: "unknown", reason: "Missing or invalid quota remaining" };
++  }
++  if (groups.some((group) => !group.buckets.length)) {
++    return { status: "unknown", reason: "Quota pool has no limits" };
++  }
++  return {
++    status: "available",
++    reason: "Quota available",
++    remainingFraction: Math.min(...limits.map((limit) => limit.remainingFraction!)),
++  };
++}
+diff --git a/src/usage/usage.ts b/src/usage/usage.ts
+index c6aac1b..63735cc 100644
+--- a/src/usage/usage.ts
++++ b/src/usage/usage.ts
+@@ -31,8 +31,7 @@ import type {
+ 
+ function clampFraction(value: unknown): number | undefined {
+   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+-  if (value < 0) return 0;
+-  if (value > 1) return 1;
++  if (value < 0 || value > 1) return undefined;
+   return value;
+ }
+ 
+@@ -116,14 +115,14 @@ function parseQuotaSummary(data: unknown): { groups: QuotaGroup[]; description?:
+     const buckets: QuotaBucket[] = [];
+     for (const bucket of group.buckets || []) {
+       const remaining = clampFraction(bucket.remainingFraction);
+-      if (remaining === undefined && !bucket.bucketId) continue;
++      if (remaining === undefined && !bucket.bucketId && !bucket.displayName) continue;
+       buckets.push({
+         bucketId: String(bucket.bucketId || bucket.displayName || "unknown"),
+         displayName: String(bucket.displayName || bucket.bucketId || "Limit"),
+         window: bucket.window ? String(bucket.window) : undefined,
+         resetTime: bucket.resetTime ? String(bucket.resetTime) : undefined,
+         description: bucket.description ? String(bucket.description) : undefined,
+-        remainingFraction: remaining ?? 0,
++        remainingFraction: remaining,
+       });
+     }
+     if (!buckets.length && !group.displayName) continue;
