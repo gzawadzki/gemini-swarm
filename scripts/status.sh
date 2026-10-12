@@ -29,16 +29,16 @@ for i in $(seq 0 $((n - 1))); do
   entry=$(jq -c ".[$i]" "$STATE_FILE")
   name=$(jq -r '.name' <<<"$entry")
   kind=$(jq -r '.kind // "?"' <<<"$entry")
-  account=$(jq -r '.account // "a"' <<<"$entry")
+  account=$(jq -r '.account // empty' <<<"$entry")
   fallback_from=$(jq -r '.fallback_from // ""' <<<"$entry")
   status_file=$(jq -r '.status_file' <<<"$entry")
   workspace_id=$(jq -r '.workspace_id // empty' <<<"$entry")
   worktree_path=$(resolve_worktree "$(jq -r '.worktree_path // empty' <<<"$entry")" "$workspace_id")
 
-  # Legacy state may record a fallback or a separately selected account.
+  # State may record a fallback or an assigned account.
   if [[ -n "$fallback_from" ]]; then
     kind="${kind}*"
-  elif [[ -n "$account" && "$account" != "a" ]]; then
+  elif [[ -n "$account" ]]; then
     kind="${kind}@${account^^}"
   fi
 
@@ -178,4 +178,4 @@ echo
 echo "Review-ready = HERDR idle/done + RESULT success + CLEAN yes + VERIFY pass/skipped"
 echo "               + CRITIQUE run. Jev auto-pass approves; every other result still needs a diff read."
 echo "RESULT OVERDUE means the task passed its work_budget_ms and has not written a result file."
-echo "AGENT ending in @B or * describes a legacy agy run. Pi rotates linked Antigravity accounts internally."
+echo "AGENT @A/@B is the initial quota-checked account; runtime failover is process-local. * marks a legacy fallback."

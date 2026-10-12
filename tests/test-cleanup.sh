@@ -152,6 +152,7 @@ nogrep "its worktree is left alone" "worktree remove" "$(cat "$HERDR_CALL_LOG")"
 echo
 echo "== 10. the run is archived before anything is closed =="
 reset_world
+printf '%s\n' '{"tasks":[{"status":"ready","account":"a"}]}' > "$RUN/.herdr-swarm/quota.json"
 out=$(run_cleanup --all --worktrees)
 ARCH="$HERDR_SWARM_RUN_DIR/run-$RUN_SEQ"
 grepok "prints where the archive went" "archive: .*run-$RUN_SEQ" "$out"
@@ -160,6 +161,7 @@ check  "archive directory exists" "yes" "$([[ -d "$ARCH" ]] && echo yes || echo 
 # post-mortem was left working from memory.
 check  "keeps the config as launched" "do the thing" "$(jq -r '.tasks[0].prompt' "$ARCH/tasks.json")"
 check  "keeps the state file" "3" "$(jq 'length' "$ARCH/state.json")"
+check  "keeps the quota decision" "a" "$(jq -r '.tasks[0].account' "$ARCH/quota.json")"
 # An odd run has to be attributable to the version of the skill that produced it.
 check  "records the skill commit" "abc1234" "$(jq -r '.skill_commit' "$ARCH/run.json")"
 check  "records that the tree was dirty" "2" "$(jq -r '.skill_dirty' "$ARCH/run.json")"

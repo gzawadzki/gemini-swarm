@@ -292,7 +292,11 @@ autoflag_for_kind() {
 # Pi's Antigravity provider exposes a public model ID and a separate thinking
 # level. Older Antigravity CLI slugs encode that level in the model name.
 pi_model_args() {
-  local model="${1:-gemini-3.8-flash-high}" thinking="${2:-}"
+  local model="${1:-gemini-3.8-flash-high}" thinking="${2:-}" provider="antigravity"
+  if [[ "$model" == */* ]]; then
+    provider="${model%%/*}"
+    model="${model#*/}"
+  fi
   case "$model" in
     gemini-*-low|gemini-*-medium|gemini-*-high)
       [[ -n "$thinking" ]] || thinking="${model##*-}"
@@ -304,7 +308,7 @@ pi_model_args() {
       [[ -n "$thinking" ]] || thinking=medium
       model="${model%-medium}" ;;
   esac
-  printf '%s\n' --provider antigravity --model "$model"
+  printf '%s\n' --provider "$provider" --model "$model"
   [[ -n "$thinking" ]] && printf '%s\n' --thinking "$thinking"
   return 0
 }
@@ -740,6 +744,7 @@ _archive_collect() {  # <dir> <state-file>
   meta=$(run_meta_file)
 
   cp "$state_file" "$dir/state.json" 2>/dev/null || true
+  cp "$(dirname "$state_file")/quota.json" "$dir/quota.json" 2>/dev/null || true
   if [[ -f "$meta" ]]; then
     cp "$meta" "$dir/run.json" 2>/dev/null || true
     # The config as launched, not as it sits on disk now: the file the
