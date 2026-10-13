@@ -20,9 +20,21 @@ Pi discovers skills in `~/.agents/skills/`. Start Pi inside a herdr-managed pane
 
 Invoke `/skill:herdr-gemini-swarm` and give Pi bounded coding tasks. The command uses the name declared in `SKILL.md`, not the clone directory name.
 
+## Distribution contents
+
+This repository contains the installable skill: `SKILL.md`, runtime scripts,
+required provider patches, and operator documentation. Task configs, run archives,
+evaluation datasets, tests, and development notes are not distributed.
+Keep generated configs and evidence in your project's run directory, outside the
+installed skill.
+
+Quota preflight requires the compatible provider patch described in
+[quota installation](docs/reference/quota-preflight.md#installation-and-verification).
+Installing the unpatched provider alone is not sufficient.
+
 ## Run manually
 
-Create `tasks.json`:
+Create `tasks.json` in your project's run directory:
 
 ```json
 {
@@ -42,31 +54,21 @@ Create `tasks.json`:
 }
 ```
 
-Run the scripts from the skill checkout, or use their absolute paths from your project:
+Run from your project's run directory so state stays outside the skill checkout:
 
 ```bash
-# From ~/.agents/skills/gemini-swarm, with your task config:
-scripts/launch.sh --allow-unsandboxed tasks.json
-scripts/status.sh
-scripts/verify.sh fix-auth-bug
-scripts/critique.sh fix-auth-bug
-scripts/review.sh fix-auth-bug
-scripts/cleanup.sh --worktrees
+SKILL_DIR="$HOME/.agents/skills/gemini-swarm"
+bash "$SKILL_DIR/scripts/launch.sh" --allow-unsandboxed tasks.json
+bash "$SKILL_DIR/scripts/status.sh"
+bash "$SKILL_DIR/scripts/verify.sh" fix-auth-bug
+bash "$SKILL_DIR/scripts/critique.sh" fix-auth-bug
+bash "$SKILL_DIR/scripts/review.sh" fix-auth-bug
+bash "$SKILL_DIR/scripts/cleanup.sh" --worktrees
 ```
 
 `verify` runs in the agent worktree and checks where the tested code resolved. A pass from another checkout is rejected; an unknown result is marked `skipped`. The critique asks Jev first. A verified, sound, in-scope diff whose signals are all at or below the threshold is accepted without a generative reviewer. Anything else goes to that reviewer. Set `HERDR_SWARM_JEV_MODE=shadow` to score without accepting, or `disabled` to skip Jev. Read the handoff before merging. Cleanup archives the run under `~/.herdr/runs/`.
 
 Unattended workers require an explicit unsandboxed opt-in when no sandbox backend is available. Read the launch warning and [worker permissions](docs/reference/worker-permissions.md) before using it. A Git worktree separates files but does not confine the worker process.
-
-## Development checks
-
-Run the isolated tests from the repository root; they use fake tools rather than live worker panes:
-
-```bash
-for test in tests/test-*.sh; do bash "$test" || exit; done
-python tests/test-jev-eval.py
-python tests/test-run-outcome.py
-```
 
 ## References
 

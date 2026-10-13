@@ -88,7 +88,7 @@ implements an autonomous daemon.
 ```
 
 If it is not `1`, **stop** and tell the user this skill only works from inside a
-herdr-managed pane, meaning Claude Code itself was started with `herdr` or inside
+herdr-managed pane, meaning Pi itself was started with `herdr` or inside
 a herdr session. Do not launch a new herdr server or fake this check.
 
 ### 1. Read the code, then cut it into slices
@@ -117,7 +117,7 @@ explaining each choice. An explicit user choice wins.
 - Choose `pi` / `gemini-3.8-flash-high` when the slice is self-contained but not
   mechanical: it still needs algorithmic judgment inside a bounded file set. A
   production file plus its test can still be one slice. Ordinary non-mechanical
-  Pi work stays at high thinking ([ADR 0003](docs/adr/0003-flash-high-is-the-default.md)).
+  Pi work stays at high thinking.
 - Choose `codex` / `gpt-6-luna` / `xhigh` when the work has a known scope but
   requires one agent to resolve competing explanations or keep coupled behavior
   consistent across modules. Use it for consequential auth, permission, schema,
@@ -132,8 +132,8 @@ launched task has named files, pitfalls, and a verification command.
 ### 1b. Freeze the contract, then launch one wave
 
 Do this after routing and before writing `tasks.json`. It is scheduling, not a
-new task format. `tasks.json` stays the flat list in
-[`tasks.example.json`](tasks.example.json). Do not add `wave`, `depends_on`, or
+new task format. `tasks.json` stays the flat list documented in
+[the task schema](docs/reference/task-definition.md#schema). Do not add `wave`, `depends_on`, or
 `contract` fields.
 
 **Contract first.** If two or more slices will call a type, function, or route
@@ -160,11 +160,11 @@ editing files the current wave still owns.
 
 ### 2. Write the task config
 
-Generate a JSON file shaped like [`tasks.example.json`](tasks.example.json). The
-scripts depend on that schema, so do not invent another one. `files` and
-`pitfalls` are required, and `launch.sh` will not start a task that omits either:
-filling them honestly is not possible without step 1, which is the whole
-mechanism ([ADR 0002](docs/adr/0002-required-files-and-pitfalls.md)).
+Generate a run-local JSON file following [the task schema](docs/reference/task-definition.md#schema).
+The scripts depend on that schema, so do not invent another one. `files` and
+`pitfalls` are required, and `launch.sh` will not start a task that omits either.
+Fill them from the recon in step 1. Keep task configs and generated run evidence
+outside the installed skill; they are operator data, not distributable files.
 
 **Reference:** [defining a task](docs/reference/task-definition.md) — every
 field, and the rules for writing a prompt the reviewer can grade against.

@@ -148,7 +148,7 @@ for i in $(seq 0 $((n_tasks - 1))); do
   # to remove: the agent discovers the traps instead, and the discoveries come
   # back as bounced verifies and invented dead code. Filling `pitfalls` honestly
   # is not possible without reading, so requiring the field enforces the reading.
-  # See docs/adr/0002-required-files-and-pitfalls.md.
+  # See docs/reference/task-definition.md for the required recon fields.
   missing=()
   [[ "$files_type" == "array" ]] || missing+=("files")
   [[ "$pitfalls_type" == "array" ]] || missing+=("pitfalls")

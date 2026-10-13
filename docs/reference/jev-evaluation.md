@@ -80,15 +80,12 @@ Annotators set `human_label`:
 Allowed risks: `requirement_missing`, `correctness_defect`, `unrelated_change`,
 `security_risk`, `check_weakened`, `regression_test_missing`, or named pitfalls.
 
-## Archive study
+## Local evaluation data
 
-The first prepared set from `~/.herdr/runs` is recorded in
-[jev-eval-study.md](jev-eval-study.md). As of 2026-09-25 it has 33 candidate
-records, zero human labels, and two Jev-scored diffs. Neither scored diff is an
-auto-accept candidate. The `0.10` threshold stays an uncalibrated policy default.
-The full JSONL, including other repositories' diffs, stays outside this public
-repo at `~/.herdr/jev-candidates.jsonl`. The committed index omits prompts and
-diffs: [evals/jev/index.jsonl](../../evals/jev/index.jsonl).
+Keep archives, candidate records, labels, and reports outside the installed skill.
+They can contain task prompts and other repositories' diffs. This distribution
+includes the analysis tool and its usage documentation, not datasets or archive
+studies. The `0.10` threshold remains an uncalibrated policy default.
 
 ## Shadow mode and the soundness gate
 
@@ -112,5 +109,4 @@ In shadow mode:
 5. Periodically run `jev-eval.py prepare`. Human labels stay blank until a person
    sets them. Missing labels are not acceptable diffs.
 
-Shadow scores are not a calibration set. The 2026-09-25 archive was collected
-before this scoring change and has no sound, labeled, Jev-scored diff.
+Shadow scores alone are not a calibration set; explicit human labels are required.

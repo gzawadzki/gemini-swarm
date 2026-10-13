@@ -27,8 +27,7 @@ or harness the user chose explicitly takes precedence.
    `kind: "pi"`, `model: "gemini-3.8-flash"`, `effort: "medium"`. Do not use
    `low` for that path. Self-contained work that still needs algorithmic
    judgment stays at high thinking: `model: "gemini-3.8-flash-high"`. That
-   remains the default for ordinary non-mechanical Pi work
-   ([ADR 0003](../adr/0003-flash-high-is-the-default.md)).
+   remains the default for ordinary non-mechanical Pi work.
 3. **Use Luna 6 xhigh** when the task is scoped but its correctness depends on
    comparing plausible causes, changing a shared contract across modules, or
    preserving coupled behavior through implementation and tests. Consequential
@@ -76,8 +75,7 @@ suffix. Pi tasks with no model use `gemini-3.8-flash` at high thinking.
 Within the Pi route, use Flash for ordinary scoped work and Pro when the task
 needs more context.
 Claude and GPT models use the scarcer Antigravity quota group. The user may
-choose any model their account offers. See [ADR 0003](../adr/0003-flash-high-is-the-default.md)
-for the Flash default.
+choose any model their account offers. Flash remains the default.
 
 ## Reviewer
 

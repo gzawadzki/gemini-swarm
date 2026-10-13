@@ -57,7 +57,7 @@ you extend the tracing: the log is meant to stay safe to paste into a chat.
 `ready_timeout_ms` is how long herdr waits for the agent's TUI to accept input,
 and herdr caps it at 300000. A work-budget-sized value in that field fails the
 launch outright. `launch.sh` clamps it and warns, and the two clocks are separate
-fields now — see [ADR 0004](../adr/0004-split-the-timeout-field.md). A
+fields now: `ready_timeout_ms` and `work_budget_ms`. A
 `timeout_ms` above 300000 anywhere is that bug.
 
 The measured run: `agent.start timeout=900000` at 23:19:38, failed one second

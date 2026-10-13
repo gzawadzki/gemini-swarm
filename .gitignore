@@ -1,20 +1,20 @@
-# Working notes that quote a private repository. This repo is public, so the
-# notes stay on disk and out of the history; the ADRs and the spec cite them as a
-# local primary source, not as a file a reader can open here.
-.scratch/swarm-rebuild-findings.md
-
-# Per-run swarm state, written next to whatever repo the swarm was launched from.
-.herdr-swarm/
-
-# Local credentials and overrides. Keep the documented template in Git.
+# Distribution contains only the installable skill and runtime documentation.
+# Keep development material and operator data local.
 .env
 .env.*
-!.env.example
-
-# Local agent state and test caches
+*.json
+*.jsonl
+.herdr-swarm/
 .omo/
+.pi/
+.scratch/
+tests/
+evals/
+docs/adr/
+docs/proposals/
+docs/reference/jev-eval-study.md
+AGENTS.md
+**/AGENTS.md
 .pytest_cache/
-
-# Python bytecode
 __pycache__/
 *.py[cod]

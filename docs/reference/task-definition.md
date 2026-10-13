@@ -16,8 +16,7 @@ counter-example is one four-part ticket that landed first time, in 9.5 minutes,
 with zero bounces, because three minutes of reading produced three named traps in
 the prompt. Tasks written without that reading came back with bounced verifies,
 dead branches built from conditions no input satisfies, and prompt steps pasted
-into the source as numbered comments. See
-[ADR 0002](../adr/0002-required-files-and-pitfalls.md).
+into the source as numbered comments.
 
 Recon is yours. Do not delegate it to a cheap agent: a hallucinated pitfall
 enters the brief labelled as a verified fact.
@@ -64,8 +63,9 @@ next wave is a new `tasks.json` launched from that base. Do not add `wave` or
 
 ## Schema
 
-Generate a JSON file shaped like [`tasks.example.json`](../../tasks.example.json).
+Generate a run-local JSON file using the schema below.
 The scripts depend on this schema, so do not invent another one.
+Store it outside the installed skill, alongside the project's run evidence.
 
 ```json
 {
@@ -133,8 +133,7 @@ it still launch.
   public model ID and thinking level. Legacy Antigravity slugs such as
   `gemini-3.8-flash-high` are converted automatically. For codex
   it becomes `-c model_reasoning_effort="<effort>"`. Which slug to pick is in
-  [models and routing](models-and-routing.md); the default follows
-  [ADR 0003](../adr/0003-flash-high-is-the-default.md).
+  [models and routing](models-and-routing.md).
 - `args` — extra CLI flags. `launch.sh` injects the auto-approve flag and the
   model flags itself, so add only flags beyond those.
 - `verify` — the shell command `verify.sh` runs inside the worktree as
@@ -151,8 +150,7 @@ it still launch.
   **Nothing enforces it.** `status.sh` reads it to print `OVERDUE` once a task
   passes it without writing a result file, which is the only signal that tells a
   hung agent from a thinking one. A task needing far more than 15 minutes is a
-  task to split, not a number to raise. See
-  [ADR 0004](../adr/0004-split-the-timeout-field.md).
+  task to split, not a number to raise. This is separate from the TUI readiness timeout.
 
 ## Writing the prompt
 

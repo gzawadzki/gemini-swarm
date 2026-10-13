@@ -1,7 +1,7 @@
 # gemini-swarm — domain model
 
 The vocabulary this skill's docs, scripts and task configs all use. One word, one
-job: where a word was doing two jobs, the split is recorded here and in an ADR.
+job: where a word was doing two jobs, the split is recorded here.
 
 ## The work
 
@@ -37,7 +37,7 @@ Capped by herdr at 300000; above that the launch fails with
 `invalid_agent_timeout`.
 
 **`work_budget_ms`** — how long a task is expected to take. Nothing enforces it;
-`status.sh` prints `OVERDUE` past it. See [ADR 0004](docs/adr/0004-split-the-timeout-field.md).
+`status.sh` prints `OVERDUE` past it. It is separate from TUI readiness.
 
 ## The gate
 
@@ -61,8 +61,8 @@ task's own worktree. `sound` was established, `unsound` resolved somewhere else,
 off with `HERDR_SWARM_NO_SOUNDNESS=1`, and `not checked` means nothing asked.
 Only `sound` may render as a `pass`: the check exists because an editable install
 can pin imports to another checkout, and a gate that reports green for code it
-never ran is worse than no gate. See [ADR 0002](docs/adr/0002-required-files-and-pitfalls.md)
-for the sibling rule about recon, and
+never ran is worse than no gate. See
+[the task reference](docs/reference/task-definition.md) for recon and
 [the gate reference](docs/reference/the-gate.md) for the mechanism.
 
 **Run** — one `launch.sh` invocation and everything it produced: the task config,
@@ -77,6 +77,7 @@ post-mortem needs.
 **Pool** — a metered Antigravity quota bucket. "Gemini Models" is the large one
 the swarm is supposed to spend; "Claude and GPT models" is the scarce one.
 
-**Drift** — the installed skill diverging from this repo. Structurally impossible
-now: the installed path is a junction to this working tree. See
-[ADR 0001](docs/adr/0001-junction-not-installer.md).
+**Drift** — the installed skill diverging from this repo. Keep a Git checkout
+updated to the intended revision, or use a junction to that checkout for local
+installation. Local edits affect the installed behavior; the launcher records
+the skill commit and dirty paths.

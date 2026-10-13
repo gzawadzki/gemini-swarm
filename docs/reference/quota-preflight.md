@@ -79,9 +79,6 @@ git -C "$HOME/.pi/agent/npm/node_modules/pi-antigravity" apply \
 Do not force the patch onto a different upstream version. Restart existing Pi
 workers after applying it; already-loaded extensions keep their old code.
 
-```bash
-bash tests/test-quota.sh   # fixtures, actual provider stream/parser, synthetic OAuth refresh
-bash tests/test-launch.sh # blocked quota creates no worktree; eligible identity reaches pane setup
-```
-
-Tests use temporary credentials and mocked transports, not real account tokens.
+The installable skill does not bundle development tests or credential fixtures.
+At launch, missing required provider exports cause preflight to fail closed before
+any worker worktree or pane is created.
