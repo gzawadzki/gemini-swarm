@@ -80,23 +80,37 @@ Annotators set `human_label`:
 Allowed risks: `requirement_missing`, `correctness_defect`, `unrelated_change`,
 `security_risk`, `check_weakened`, `regression_test_missing`, or named pitfalls.
 
-## Shadow mode and the pending gate change
+## Archive study
 
-Shadow mode collects real Jev predictions without risking unreviewed diffs landing
-in production.
+The first prepared set from `~/.herdr/runs` is recorded in
+[jev-eval-study.md](jev-eval-study.md). As of 2026-09-25 it has 33 candidate
+records, zero human labels, and two Jev-scored diffs. Neither scored diff is an
+auto-accept candidate. The `0.10` threshold stays an uncalibrated policy default.
+The full JSONL, including other repositories' diffs, stays outside this public
+repo at `~/.herdr/jev-candidates.jsonl`. The committed index omits prompts and
+diffs: [evals/jev/index.jsonl](../../evals/jev/index.jsonl).
 
-### Alignment with pending verify soundness gate
+## Shadow mode and the soundness gate
 
-The pending gate change (proposal P0) restricts auto-acceptance to verified runs
-with confirmed soundness: `verify.status == "pass"` AND `verify.soundness == "sound"`.
-Runs where soundness is `unknown`, `unsound`, or `disabled` will never auto-accept.
+Shadow mode collects Jev predictions without skipping the generative review.
+It calls Jev even when a diff cannot be auto-accepted, including when verify is
+not `pass` or soundness is not `sound`. It still does not send a truncated diff
+or a protected path. `auto_accept` does not call Jev unless every acceptance
+precondition already holds.
+
+Auto-acceptance requires confirmed soundness: `verify.status == "pass"` AND
+`verify.soundness == "sound"`. Runs where soundness is `unknown`, `unsound`, or
+`disabled` never auto-accept. A shadow score on such a run is not an acceptance.
 
 In shadow mode:
-1. Set `HERDR_SWARM_JEV_AUTO_ACCEPT=0`.
-2. `critique.sh` records `.critique.jev-response.json` and `.critique.json` into
-   `.herdr-swarm/`, but all tasks fall through to generative critique and human read.
-3. `scripts/lib.sh` archives these signals during cleanup.
-4. Periodically run `jev-eval.py prepare` to extract candidates for labeling.
+1. Set `HERDR_SWARM_JEV_MODE=shadow`. Unset mode is `auto_accept`.
+   `HERDR_SWARM_JEV_AUTO_ACCEPT=0` is `disabled`, not shadow.
+2. `critique.sh` records the response when the call is allowed, then falls through
+   to the generative reviewer.
+3. A skipped call is archived as `attempted: false`. Do not treat that as a low risk.
+4. `scripts/lib.sh` archives the critique file during cleanup.
+5. Periodically run `jev-eval.py prepare`. Human labels stay blank until a person
+   sets them. Missing labels are not acceptable diffs.
 
-This decouples evaluation from gate enforcement, allowing the swarm to gather
-empirical calibration data across varying diff sizes and risk types safely.
+Shadow scores are not a calibration set. The 2026-09-25 archive was collected
+before this scoring change and has no sound, labeled, Jev-scored diff.

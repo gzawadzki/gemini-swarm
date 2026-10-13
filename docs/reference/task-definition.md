@@ -42,6 +42,26 @@ For a scoped change whose coupled decisions need one worker, use
 Herdr pipeline. The [worker gate](models-and-routing.md#worker-gate) makes that
 choice after recon; both routes still need named files, pitfalls, and a check.
 
+## One wave, then the next
+
+This is how the coordinator schedules slices. It is not a field in `tasks.json`.
+
+If several slices need a type, function, or route that is not in the tree yet,
+commit that interface first. Worktrees are cut from that commit. The contract
+commit is signatures and stubs, not the behavior a later slice is supposed to
+invent. Skip it when the interface is already stable.
+
+A wave is the current `tasks.json`: 2–4 tasks whose `files` lists do not
+overlap, each with its own `verify`. Launch them together. A single task is
+correct when there is only one slice, the files overlap, or the next slice
+cannot be specified until this diff exists. Do not turn "schema, then handler,
+then tests" into three launches when the handler and tests can both target the
+frozen contract.
+
+After the wave is accepted, integrate it and run the feature-level check. The
+next wave is a new `tasks.json` launched from that base. Do not add `wave` or
+`depends_on` to the schema. A task that needs an unmerged sibling is not ready.
+
 ## Schema
 
 Generate a JSON file shaped like [`tasks.example.json`](../../tasks.example.json).

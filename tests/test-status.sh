@@ -149,7 +149,7 @@ nogrep "does not blame the agent"        "then re-prompt the agent"     "$out"
 jq -n '{status:"fail", cmd:"pytest", soundness:"sound", soundness_detail:"inside"}' \
   > "$HERDR_SWARM_STATE_DIR/t1.verify.json"
 out=$(status)
-grepok "an ordinary failure still bounces" "re-prompt the agent"        "$out"
+grepok "an ordinary failure still bounces" "scripts/bounce.sh"           "$out"
 rm -f "$HERDR_SWARM_STATE_DIR/t1.verify.json"
 
 echo

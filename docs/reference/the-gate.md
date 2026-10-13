@@ -42,7 +42,11 @@ because it is counted as evidence.
 | not checked | `pass` | only with `HERDR_SWARM_NO_SOUNDNESS=1`, and the result records `"soundness": "disabled"` |
 
 The mechanism is provisional and deliberately narrow: it resolves the module
-named by `pyproject.toml` and checks the path. Only Python is in evidence, so
+named by `pyproject.toml` and checks the path. A pytest command also treats
+`[tool.pytest.ini_options] pythonpath` as a positive resolution when that
+directory is inside the worktree and contains the module, because pytest
+prepends it before site-packages. A non-pytest command does not get that
+credit. Only Python is in evidence, so
 every other project reports `skipped` rather than assuming soundness. Widening it
 means adding a positive check per ecosystem — never treating a language as safe
 because the trap has not been seen there yet. The requirement is the guarantee,
@@ -75,18 +79,17 @@ whose answers are probabilities that a bad condition is true:
 
 Three operational modes are supported:
 
-- **`shadow` (default)**: Jev evaluates the typed risk questions and records the
-  signals and maximum risk in the verdict and state archive, but always passes
-  the diff through to the generative reviewer. Shadow mode remains the default
-  until a labeled local evaluation demonstrates an acceptable false-accept rate.
-- **`auto_accept` (explicit opt-in)**: allows Jev to approve verified, clean,
-  bounded diffs without starting a generative reviewer when every risk signal is
-  at or below `HERDR_SWARM_JEV_ACCEPT_MAX` (`0.10` by default). Opt in by setting
-  `HERDR_SWARM_JEV_MODE=auto_accept` or `HERDR_SWARM_JEV_AUTO_ACCEPT=1`.
+- **`auto_accept` (default)**: Jev may approve a verified, clean, bounded diff
+  without starting a generative reviewer when every risk signal is at or below
+  `HERDR_SWARM_JEV_ACCEPT_MAX` (`0.10` by default). This is the mode when
+  `HERDR_SWARM_JEV_MODE` is unset. `HERDR_SWARM_JEV_AUTO_ACCEPT=1` also selects it.
+- **`shadow`**: records the signals and still sends the diff to the generative
+  reviewer. Set `HERDR_SWARM_JEV_MODE=shadow`. A diff that fails an acceptance
+  precondition is still scored, except a truncated diff or a protected path.
 - **`disabled`**: skips Jev calls entirely (`HERDR_SWARM_JEV_MODE=disabled` or
   `HERDR_SWARM_JEV_AUTO_ACCEPT=0`).
 
-Automatic acceptance requires explicit opt-in, verify `status == pass` AND
+Automatic acceptance requires verify `status == pass` AND
 verify `soundness == sound` (pass alone cannot authorize Jev, e.g. when soundness
 is disabled via `HERDR_SWARM_NO_SOUNDNESS=1`, unknown, or unsound), a clean
 worktree, a complete diff, readable scope data, no strays, no oversize report,
@@ -145,15 +148,19 @@ auditable rather than a quiet rewrite.
 Exit status is 0 for everything except `revise` and `reject`, which exit 1, so a
 tooling failure never wedges the pipeline — it falls through to your read.
 
-### The reviewer is a different model
+### The fallback reviewer when Jev does not approve
 
-A model grading its own output shares its own blind spots. When the task's
-`model` in `state.json` is the critique model, `critique.sh` reviews on
-`HERDR_SWARM_CRITIQUE_ALT_MODEL` instead (default `gemini-3.1-pro-high`, still on
-the Gemini pool). The verdict file records `worker_model` and `independent`. The
-one case this cannot avoid is a codex task critiqued by codex while the
-reviewer is also Codex; the script warns and writes `"independent": false`. Tell
-the user when that happens, and weigh that `pass` as the self-review it is.
+Jev is tried first. When it does not approve, `critique.sh` starts a generative
+reviewer. If the task's `model` in `state.json` is the critique model, that
+fallback is `HERDR_SWARM_CRITIQUE_ALT_MODEL` instead of the default reviewer.
+The default is `gemini-3.8-flash-medium`: `gemini-3.8-flash` at medium effort,
+not `gemini-3.1-pro-high`. It stays on the Gemini pool. It is the same model
+family as the default worker, at a lower thinking level, so it is a latency
+fallback rather than a cross-family review. The verdict file records
+`worker_model` and `independent`. `independent` is false only when those model
+strings match. The one case the script warns about in prose is a codex task
+critiqued by codex while the reviewer is also Codex. Tell the user when that
+happens, and weigh that `pass` as the self-review it is.
 
 ### Plugins are off for every codex the swarm starts
 
@@ -170,14 +177,14 @@ to leave the prompt unchanged. `~/.codex/AGENTS.md` still loads. Set
 |----------|---------|--------|
 | `TYPESAFE_API_KEY` | unset | use `https://api.typesafe.ai/v1/systemone`; preferred when both keys exist |
 | `OPENROUTER_API_KEY` | unset | use `https://openrouter.ai/api/alpha/decisions` when no TypeSafe key exists |
-| `HERDR_SWARM_JEV_MODE` | `shadow` | `shadow` records signals and sends diffs to generative review; `auto_accept` allows automatic pass; `disabled` skips Jev |
-| `HERDR_SWARM_JEV_AUTO_ACCEPT` | `0` | `1` explicitly opts in to automatic acceptance (`auto_accept`); `0` disables |
+| `HERDR_SWARM_JEV_MODE` | `auto_accept` | unset approves eligible diffs; `shadow` records signals and still reviews; `disabled` skips Jev |
+| `HERDR_SWARM_JEV_AUTO_ACCEPT` | unset | `1` or unset selects `auto_accept` when mode is unset; `0` disables |
 | `HERDR_SWARM_JEV_ACCEPT_MAX` | `0.10` | maximum accepted probability for every bad-condition signal; must be in `[0, 0.5)` |
 | `HERDR_SWARM_JEV_MODEL` | route default | override `jev-latest` or `~typesafe/jev-latest` |
 | `HERDR_SWARM_JEV_TIMEOUT` | `60` | request timeout in seconds |
 | `HERDR_SWARM_JEV_URL` | route default | endpoint override, primarily for a compatible gateway or tests |
 | `HERDR_SWARM_CRITIQUE_MODEL` | `gemini-3.8-flash-high` | the reviewer model |
-| `HERDR_SWARM_CRITIQUE_ALT_MODEL` | `gemini-3.1-pro-high` | used when the default would review its own work |
+| `HERDR_SWARM_CRITIQUE_ALT_MODEL` | `gemini-3.8-flash-medium` | generative fallback when Jev does not approve a diff written by the default critique model; `gemini-3.8-flash` at medium effort |
 | `HERDR_SWARM_CRITIQUE_KIND` | auto | force `pi`, `codex` or `gemini` |
 | `HERDR_SWARM_CRITIQUE_EFFORT` | `medium` | reasoning effort |
 | `HERDR_SWARM_CRITIQUE_TIMEOUT` | `600` | seconds |

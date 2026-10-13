@@ -23,10 +23,11 @@ whose correctness depends on several decisions staying together.
 
 - **Route each slice.** Use the gate in step 1 before setting `kind` in the task
   config. Let deterministic scripts watch agents and run the two-stage review.
-- **Decompose for parallelism.** Throughput comes from fanning out, so prefer
-  slices that touch disjoint files. When tasks genuinely depend on each other, run
-  the upstream one, review and merge it, then launch the downstream one from the
-  new base rather than guessing at a moving target.
+- **Decompose for parallelism.** The default is one wave of 2–4 disjoint slices
+  in one `tasks.json`, not one task at a time. A shared interface that does not
+  exist yet is frozen in the base commit first. A real dependency is the next
+  wave, launched only after the upstream diff is integrated. Do not serialize
+  work just because the narrative order is schema, then logic, then tests.
 - **Give each task a self-check.** A prompt that ends in "run these tests" plus a
   scoped `verify` command turns a vague "done" into a fact you can gate on.
 - **Keep the wrappers thin.** These scripts are output filters and contract
@@ -109,9 +110,14 @@ Apply the [worker gate](docs/reference/models-and-routing.md#worker-gate)
 after reading the code and before writing `tasks.json`. Record one sentence
 explaining each choice. An explicit user choice wins.
 
-- Choose `pi` / `gemini-3.8-flash-high` when the files, expected behavior,
-  pitfalls, and one verification command make the task self-contained. A
-  production file plus its test can still be one slice.
+- Choose `pi` / `gemini-3.8-flash` with `effort: "medium"` when the slice is
+  mechanical: the behavior is already specified, the edit follows an existing
+  pattern, and one check can expose a wrong result. Do not drop mechanical work
+  to `low`.
+- Choose `pi` / `gemini-3.8-flash-high` when the slice is self-contained but not
+  mechanical: it still needs algorithmic judgment inside a bounded file set. A
+  production file plus its test can still be one slice. Ordinary non-mechanical
+  Pi work stays at high thinking ([ADR 0003](docs/adr/0003-flash-high-is-the-default.md)).
 - Choose `codex` / `gpt-6-luna` / `xhigh` when the work has a known scope but
   requires one agent to resolve competing explanations or keep coupled behavior
   consistent across modules. Use it for consequential auth, permission, schema,
@@ -122,6 +128,35 @@ explaining each choice. An explicit user choice wins.
 
 Completion criterion: every candidate has a route and a checkable reason; every
 launched task has named files, pitfalls, and a verification command.
+
+### 1b. Freeze the contract, then launch one wave
+
+Do this after routing and before writing `tasks.json`. It is scheduling, not a
+new task format. `tasks.json` stays the flat list in
+[`tasks.example.json`](tasks.example.json). Do not add `wave`, `depends_on`, or
+`contract` fields.
+
+**Contract first.** If two or more slices will call a type, function, or route
+that is not already in the tree, put that interface in the commit the worktrees
+are created from. The contract commit is signatures and stubs only. Do not wait
+for the first module's full behavior before starting the others. Skip this when
+the interface already exists and is stable. Do not add a stub just to follow the
+pattern.
+
+**Fan out the current wave.** Put 2–4 tasks in one `tasks.json` when their
+`files` lists do not overlap and each can be verified against the frozen base.
+A feature with separate modules, tests, docs, or adapters is a batch. Launch
+that file once. One task is the right batch only when the work is a single
+slice, the files overlap, or the next slice cannot be named until this diff
+exists.
+
+**The next wave is a new launch.** Integrate the accepted diffs from this wave
+and run the feature-level check. Then write a new `tasks.json` for slices that
+need that result, and launch it from the new base. Do not start those agents
+against a base that does not contain the upstream diff, and do not leave them
+editing files the current wave still owns.
+
+**Reference:** [defining a task](docs/reference/task-definition.md#one-wave-then-the-next).
 
 ### 2. Write the task config
 
@@ -211,9 +246,11 @@ scripts/critique.sh <task-name>
 
 Jev first evaluates fixed, typed risk signals for a verified, clean, in-scope
 diff. When every probability clears the threshold it records automatic
-acceptance; otherwise the existing generative reviewer reads the diff against
-the prompt and declared pitfalls. `revise` and `reject` go back to the agent with
-the issues attached, again without costing you a read.
+acceptance; otherwise the generative reviewer reads the diff against the prompt
+and declared pitfalls. When Jev does not approve a diff written by the default
+worker, that fallback is `gemini-3.8-flash` at medium effort, not
+`gemini-3.1-pro-high`. `revise` and `reject` go back to the agent with the
+issues attached, again without costing you a read.
 
 **Reference:** [the gate](docs/reference/the-gate.md#stage-2-critique-the-judgement-half).
 
@@ -238,15 +275,17 @@ not before it.
 ### 8. Bounce, at most twice
 
 ```bash
-herdr agent prompt <name> "<specific fix>" --wait
+scripts/bounce.sh <name> "<specific fix>"
 scripts/logs.sh <name> [lines]
 ```
 
 Send fixes back to the same agent rather than rewriting the code yourself — it
 already has the context. Paste the failing command and its output, or the
-critique's issue list verbatim. Cap this at two review-fix rounds per task, then
-reroute as allowed by the worker gate and the user's explicit model choice, or
-report a concrete blocker. Do not re-prompt forever or silently implement the fix yourself.
+critique's issue list verbatim. `bounce.sh` records `prompt.rework` and refuses
+a third round. Do not call `herdr agent prompt` for a fix: that bounce is not
+measured. After two rounds, reroute as allowed by the worker gate and the user's
+explicit model choice, or report a concrete blocker. Do not silently implement
+the fix yourself.
 
 ### 9. Integrate according to the delivery authorization
 
@@ -278,7 +317,28 @@ A swarm task is not complete until the cleanup is verified: no leftover workspac
 worktree, disposable branch or scratch state, and the user's own working-tree
 changes untouched.
 
-**Reference:** [cleanup and the run archive](docs/reference/cleanup-and-archive.md).
+After cleanup, record the outcome you actually observed. Do not invent zeros for
+fields you did not measure; omitted fields stay `unknown`.
+
+```bash
+python scripts/run-outcome.py annotate <run-id> \
+  --merge-outcome merged \
+  --human-minutes <minutes> \
+  --post-merge-fixes <count>
+python scripts/run-outcome.py report
+```
+
+Use `discarded` or `partial` when that is what happened. `latest` is acceptable
+only when the archive just printed is the run you integrated. Refresh the Jev
+candidate file from the same archives, still with human labels blank:
+
+```bash
+python scripts/jev-eval.py prepare ~/.herdr/runs -o ~/.herdr/jev-candidates.jsonl
+```
+
+**Reference:** [cleanup and the run archive](docs/reference/cleanup-and-archive.md),
+[run outcomes](docs/reference/run-outcomes.md),
+[Jev evaluation](docs/reference/jev-evaluation.md).
 
 ### When something looks like success but is not
 

@@ -107,7 +107,9 @@ config, by accident rather than design.
 `sound` renders as a pass — see [the gate](the-gate.md#a-green-command-is-not-yet-a-pass).
 When it reports `fail` on resolution, **do not re-prompt the agent**: the diff may
 be fine and the environment is what lied. Reinstall inside the worktree, or set a
-pythonpath for it, then rerun.
+pytest `pythonpath` that points at this worktree and contains the module, then
+rerun. `verify.sh` honors that `pythonpath` only when the verify command is
+pytest; a bare command still follows the installed distribution.
 
 The same trap in the other direction is why a `verify` command must never
 reinstall the package: `pip install -e .` in a verify command repoints the

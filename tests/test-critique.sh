@@ -44,8 +44,9 @@ echo "== 1. task written by the critique model: reviewed by the alternate =="
 write_state "gemini-3.8-flash-high"
 out=$(critique); rc=$?
 check  "exit code on pass" "0" "$rc"
-grepok "pi ran on the alternate model"  "--model gemini-3.1-pro --thinking medium" "$(cat "$CALL_LOG")"
-check  "verdict records reviewer"  "gemini-3.1-pro-high"   "$(verdict .model)"
+grepok "pi ran on the alternate model"  "--model gemini-3.8-flash --thinking medium" "$(cat "$CALL_LOG")"
+nogrep "does not escalate to pro"    "gemini-3.1-pro" "$(cat "$CALL_LOG")"
+check  "verdict records reviewer"  "gemini-3.8-flash-medium" "$(verdict .model)"
 check  "verdict records worker"    "gemini-3.8-flash-high" "$(verdict .worker_model)"
 check  "verdict is independent"    "true"                  "$(verdict .independent)"
 check  "verdict duration is numeric" "number"              "$(verdict '.duration_s | type')"
@@ -273,6 +274,16 @@ check  "records the high risk"            "0.91"  "$(verdict .jev.risk_max)"
 grepok "pi reviewer ran"                 "^pi " "$(cat "$CALL_LOG")"
 
 echo
+echo "== 6b2. Jev decline of a flash-high diff uses flash medium, not pro =="
+write_state "gemini-3.8-flash-high" '["file.txt"]' '[]'
+verify_pass
+out=$(TYPESAFE_API_KEY='k' HERDR_SWARM_JEV_AUTO_ACCEPT=1 FAKE_JEV_RESPONSE="$FAKE_JEV_RESPONSE" critique); rc=$?
+check  "not auto-accepted"              "false" "$(verdict .auto_accepted)"
+check  "fallback reviewer is flash medium" "gemini-3.8-flash-medium" "$(verdict .model)"
+grepok "pi ran flash at medium effort"  "--model gemini-3.8-flash --thinking medium" "$(cat "$CALL_LOG")"
+nogrep "pro was not started"            "gemini-3.1-pro" "$(cat "$CALL_LOG")"
+
+echo
 echo "== 6c. Jev failure falls back without wedging the gate =="
 write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
 verify_pass
@@ -317,19 +328,19 @@ git -C "$SRC" reset --hard HEAD~1 -q
 rm -rf "$SRC/auth"
 
 echo
-echo "== 6g. shadow mode is default: records Jev signals and runs generative reviewer =="
+echo "== 6g. auto-accept is the default when a key is present =="
 write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
 verify_pass
 out=$(TYPESAFE_API_KEY='must-not-leak' FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
 check  "exit code on pass"             "0"            "$rc"
 check  "verdict is pass"               "pass"         "$(verdict .verdict)"
-check  "does not auto-accept"          "false"        "$(verdict .auto_accepted)"
-check  "records mode is shadow"        "shadow"       "$(verdict .jev.mode)"
+check  "records automatic acceptance"  "true"         "$(verdict .auto_accepted)"
+check  "records mode is auto_accept"   "auto_accept"  "$(verdict .jev.mode)"
 check  "records Jev attempted"         "true"         "$(verdict .jev.attempted)"
 check  "records exact Jev model"       "jev-1.13.0"   "$(verdict .jev.model)"
 check  "records maximum risk"          "0.04"         "$(verdict .jev.risk_max)"
-grepok "pi reviewer ran"               "^pi "         "$(cat "$CALL_LOG")"
-nogrep "does not print auto-accepted"  "AUTO-ACCEPTED" "$out"
+nogrep "does not start pi"             "^pi "         "$(cat "$CALL_LOG")"
+grepok "prints automatic acceptance"   "AUTO-ACCEPTED" "$out"
 grepok "request carries the task"      'append world' "$(cat "$HERDR_SWARM_STATE_DIR/t1.critique.jev-request.json")"
 
 echo
@@ -360,6 +371,33 @@ nogrep "Jev was not called"            "^curl "       "$(cat "$CALL_LOG")"
 grepok "pi reviewer ran"               "^pi "         "$(cat "$CALL_LOG")"
 
 echo
+echo "== 6j2. shadow mode scores a diff that cannot auto-accept =="
+write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
+jq -n '{status:"pass", cmd:"test-command", soundness:"unknown"}' > "$HERDR_SWARM_STATE_DIR/t1.verify.json"
+out=$(TYPESAFE_API_KEY='k' HERDR_SWARM_JEV_MODE=shadow FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
+check  "shadow ineligible exit"          "0"       "$rc"
+check  "shadow ineligible not accepted"  "false"   "$(verdict .auto_accepted)"
+check  "shadow ineligible mode"          "shadow"  "$(verdict .jev.mode)"
+check  "shadow ineligible attempted"     "true"    "$(verdict .jev.attempted)"
+check  "shadow ineligible records risk"  "0.04"    "$(verdict .jev.risk_max)"
+grepok "shadow ineligible calls Jev"     "^curl "  "$(cat "$CALL_LOG")"
+grepok "shadow ineligible still reviews" "^pi "   "$(cat "$CALL_LOG")"
+
+echo
+echo "== 6j3. shadow mode does not send a protected path to Jev =="
+mkdir -p "$SRC/auth"
+echo policy > "$SRC/auth/policy.txt"
+git -C "$SRC" add auth/policy.txt && git -C "$SRC" commit -qm protected-shadow
+write_state "gemini-3.1-pro-high" '["file.txt","auth/policy.txt"]' '[]'
+verify_pass
+out=$(TYPESAFE_API_KEY='k' HERDR_SWARM_JEV_MODE=shadow FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
+check  "protected shadow not accepted"   "false"   "$(verdict .auto_accepted)"
+nogrep "protected shadow does not call"  "^curl "  "$(cat "$CALL_LOG")"
+grepok "protected shadow still reviews"  "^pi "    "$(cat "$CALL_LOG")"
+git -C "$SRC" reset --hard HEAD~1 -q
+rm -rf "$SRC/auth"
+
+echo
 echo "== 6k. Jev disabled mode skips Jev entirely =="
 write_state "gemini-3.1-pro-high" '["file.txt"]' '[]'
 verify_pass
@@ -381,6 +419,21 @@ check  "records automatic acceptance"  "true"         "$(verdict .auto_accepted)
 check  "records mode is auto_accept"   "auto_accept"  "$(verdict .jev.mode)"
 check  "auto-accept duration is numeric" "number"     "$(verdict '.duration_s | type')"
 nogrep "does not start pi"             "^pi "         "$(cat "$CALL_LOG")"
+
+echo
+echo "== 6m. a passing scoped test is evidence in the Jev request =="
+mkdir -p "$SRC/tests"
+printf 'def test_currency():\n    assert "PLN" in open("docs/api.md").read()\n' > "$SRC/tests/test_api_docs.py"
+git -C "$SRC" add tests/test_api_docs.py && git -C "$SRC" commit -qm "add regression test"
+write_state "gemini-3.1-pro-high" '["file.txt","tests/test_api_docs.py"]' '[]'
+jq -n '{status:"pass", cmd:"python -m pytest -q tests/test_api_docs.py", soundness:"sound"}' \
+  > "$HERDR_SWARM_STATE_DIR/t1.verify.json"
+out=$(TYPESAFE_API_KEY='k' HERDR_SWARM_JEV_MODE=auto_accept FAKE_JEV_RESPONSE="$CLEAN_JEV_RESPONSE" critique); rc=$?
+check  "still auto-accepts"          "true" "$(verdict .auto_accepted)"
+req=$(cat "$HERDR_SWARM_STATE_DIR/t1.critique.jev-request.json")
+grepok "request includes the test"   "test_currency" "$req"
+grepok "question sees that source"   "verification.test_source" "$req"
+nogrep "does not start pi"           "^pi " "$(cat "$CALL_LOG")"
 
 echo
 echo "== 7. empty diff records skipped with duration_s =="

@@ -50,8 +50,10 @@ python scripts/run-outcome.py annotate latest --merge-outcome merged --post-merg
   `trace.log` records launcher prompt *delivery attempts* (`submit_prompt`), not
   subsequent re-prompts. A single initial prompt in trace does not justify rework=0.
   `prompt_retries` is marked `unknown` unless explicitly annotated or a dedicated
-  rework event is logged in trace. Launcher delivery retries are tracked separately
-  as `prompt_delivery_retries`.
+  rework event is logged in trace. `scripts/bounce.sh` writes `prompt.rework` on
+  every successful fix, even when `--trace` is off, and refuses a third bounce.
+  A raw `herdr agent prompt` is not counted. Launcher delivery retries are tracked
+  separately as `prompt_delivery_retries`.
 
 ## Absent Data is Unknown, Never Zero
 

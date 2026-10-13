@@ -22,9 +22,13 @@ or harness the user chose explicitly takes precedence.
    files and pitfalls, and identify a command that can verify the result. A
    vague task is not a reason to start a worker.
 2. **Use Pi Antigravity** for a self-contained slice: the desired behavior is
-   clear, the implementation follows an existing pattern, the files are
-   bounded, and one check can expose a wrong result. Prefer
-   `kind: "pi"`, `model: "gemini-3.8-flash-high"`.
+   clear, the files are bounded, and one check can expose a wrong result.
+   Mechanical work — an existing pattern, no new design decision — uses
+   `kind: "pi"`, `model: "gemini-3.8-flash"`, `effort: "medium"`. Do not use
+   `low` for that path. Self-contained work that still needs algorithmic
+   judgment stays at high thinking: `model: "gemini-3.8-flash-high"`. That
+   remains the default for ordinary non-mechanical Pi work
+   ([ADR 0003](../adr/0003-flash-high-is-the-default.md)).
 3. **Use Luna 6 xhigh** when the task is scoped but its correctness depends on
    comparing plausible causes, changing a shared contract across modules, or
    preserving coupled behavior through implementation and tests. Consequential
@@ -56,8 +60,12 @@ Pi exposes public Antigravity model IDs. Inspect the current account with
 (`low`, `medium`, or `high`), for example:
 
 ```json
+{"kind":"pi","model":"gemini-3.8-flash","effort":"medium"}
 {"kind":"pi","model":"gemini-3.8-flash","effort":"high"}
 ```
+
+Use `medium` only for a mechanical slice. Use `high` when the slice is ordinary
+Pi work that is not mechanical.
 
 For existing configs, `launch.sh` converts `gemini-3.8-flash-high` to
 `--model gemini-3.8-flash --thinking high`, `gemini-3.1-pro-high` to
@@ -74,7 +82,9 @@ for the Flash default.
 ## Reviewer
 
 `critique.sh` first tries Jev automatic acceptance when its preconditions and
-credentials are present. Other diffs are reviewed through Pi on the
-Antigravity provider. It selects `gemini-3.1-pro-high` when the worker used
-the default `gemini-3.8-flash-high`, avoiding the same model reviewing itself.
-Pi runs the review in print mode with an ephemeral session.
+credentials are present. When Jev does not approve, the diff is reviewed
+through Pi on the Antigravity provider. If the worker used the default
+`gemini-3.8-flash-high`, that fallback is `gemini-3.8-flash` at medium effort
+(`gemini-3.8-flash-medium`), not `gemini-3.1-pro-high`. Pi runs the review in
+print mode with an ephemeral session. `HERDR_SWARM_CRITIQUE_EFFORT` overrides
+the thinking level and defaults to `medium`.

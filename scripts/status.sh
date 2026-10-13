@@ -150,14 +150,14 @@ for i in $(seq 0 $((n - 1))); do
     # this sends the agent to fix a diff that was never the problem.
     next_lines+=("$name: verify failed on resolution, not on the tests -> scripts/verify.sh $name for the detail; fix the install or path inside the worktree, do not re-prompt the agent")
   elif [[ "$verify" == "fail" ]]; then
-    next_lines+=("$name: verify failed -> scripts/logs.sh $name, then re-prompt the agent")
+    next_lines+=("$name: verify failed -> scripts/logs.sh $name, then scripts/bounce.sh $name \"<the failing output>\"")
   elif [[ "$critique" == "-" ]]; then
     # Tests pass. Spend a cheap model on the diff before spending your own read.
     next_lines+=("$name: verify $verify, ready to critique -> scripts/critique.sh $name")
   elif [[ "$critique_auto" == "true" ]]; then
     next_lines+=("$name: Jev auto-accepted the verified diff -> scripts/review.sh $name for the merge handoff")
   elif [[ "$critique" == "revise" || "$critique" == "reject" ]]; then
-    next_lines+=("$name: critique says $critique -> scripts/review.sh $name for the issues, then re-prompt the agent")
+    next_lines+=("$name: critique says $critique -> scripts/review.sh $name for the issues, then scripts/bounce.sh $name \"<the issue list>\"")
   else
     # Both halves of the gate are behind it: pass, skipped, or the critique
     # itself failed to produce an answer. Either way the next step is your read.

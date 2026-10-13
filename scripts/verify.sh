@@ -91,7 +91,7 @@ if [[ "$rc" -eq 0 ]]; then
     trace "$NAME" "soundness" "disabled by HERDR_SWARM_NO_SOUNDNESS"
     echo "Next: scripts/critique.sh $NAME"
   else
-    check_verify_soundness "$worktree_path"
+    check_verify_soundness "$worktree_path" "$cmd"
     trace "$NAME" "soundness" "$SOUNDNESS: $SOUNDNESS_DETAIL"
     case "$SOUNDNESS" in
       sound)
@@ -137,7 +137,7 @@ else
     SOUNDNESS="disabled"
     SOUNDNESS_DETAIL="HERDR_SWARM_NO_SOUNDNESS=1"
   else
-    check_verify_soundness "$worktree_path"
+    check_verify_soundness "$worktree_path" "$cmd"
     trace "$NAME" "soundness" "$SOUNDNESS: $SOUNDNESS_DETAIL"
   fi
   write_result "fail" "$cmd"
@@ -149,7 +149,7 @@ else
     echo "the agent's diff. Fix the install or the path, then rerun."
   else
     echo "Next: send the failure back to the agent, e.g."
-    echo "  herdr agent prompt $NAME \"verify failed: $cmd. Fix it and rerun.\" --wait"
+    echo "  scripts/bounce.sh $NAME \"verify failed: $cmd. Fix it and rerun.\""
   fi
 fi
 exit "$rc"

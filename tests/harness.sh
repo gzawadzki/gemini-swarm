@@ -21,6 +21,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$(mktemp -d)"
 BIN="$T/bin"; mkdir -p "$BIN"
 
+# Scripts load the repo .env. The suite must not inherit the operator's keys or
+# turn Jev auto-accept on just because this checkout has a .env.
+export HERDR_SWARM_DOTENV=0
+
 # The credential vault and the live-account marker the account layer reads.
 export LOCALAPPDATA="$T/appdata"; mkdir -p "$LOCALAPPDATA/herdr-swarm"
 printf 'a' > "$LOCALAPPDATA/herdr-swarm/live-account"

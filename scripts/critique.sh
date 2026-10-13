@@ -178,31 +178,39 @@ try_jev_auto_accept() {
       trace "$NAME" "jev.skip" "invalid HERDR_SWARM_JEV_ACCEPT_MAX=$JEV_ACCEPT_MAX"
       return 1
     }
-  [[ "$verify_status" == "pass" && "$verify_soundness" == "sound" ]] || {
-    trace "$NAME" "jev.skip" "verify status=$verify_status soundness=$verify_soundness; automatic acceptance requires pass and soundness sound"
-    return 1
-  }
-  [[ "$diff_truncated" == "false" ]] || {
-    trace "$NAME" "jev.skip" "the diff is truncated"
-    return 1
-  }
-  [[ -z "$(git -C "$worktree_path" status --porcelain 2>/dev/null)" ]] || {
-    trace "$NAME" "jev.skip" "the worktree is dirty"
-    return 1
-  }
-
-  scope_report "$entry" "$worktree_path"
-  [[ "$SCOPE_READABLE" == "yes" && "$SCOPE_STRAY_COUNT" -eq 0 && -z "$SCOPE_OVERSIZE" ]] || {
-    trace "$NAME" "jev.skip" "scope is not auto-acceptable: readable=${SCOPE_READABLE:-no} strays=$SCOPE_STRAY_COUNT lines=$SCOPE_LINES"
-    return 1
-  }
-
-  local changed_files protected_pattern
+  # These facts block automatic acceptance. Shadow still asks Jev, so the
+  # archive collects scores for diffs that must not be accepted. A truncated
+  # diff and a protected path are not sent either way: the first would score
+  # evidence the model did not see, and the second can contain a secret.
+  local accept_block="" hard_skip="" changed_files protected_pattern
+  if [[ "$verify_status" != "pass" || "$verify_soundness" != "sound" ]]; then
+    accept_block="verify status=$verify_status soundness=$verify_soundness; automatic acceptance requires pass and soundness sound"
+  elif [[ -n "$(git -C "$worktree_path" status --porcelain 2>/dev/null)" ]]; then
+    accept_block="the worktree is dirty"
+  else
+    scope_report "$entry" "$worktree_path"
+    if [[ "$SCOPE_READABLE" != "yes" || "$SCOPE_STRAY_COUNT" -ne 0 || -n "$SCOPE_OVERSIZE" ]]; then
+      accept_block="scope is not auto-acceptable: readable=${SCOPE_READABLE:-no} strays=$SCOPE_STRAY_COUNT lines=$SCOPE_LINES"
+    fi
+  fi
+  if [[ "$diff_truncated" != "false" ]]; then
+    hard_skip="the diff is truncated"
+  fi
   changed_files=$(git -C "$worktree_path" diff --name-only "${base_ref}...HEAD" 2>/dev/null || true)
   protected_pattern='(^|/)(\.env($|\.)|CODEOWNERS$|auth($|/|\.)|security($|/|\.)|permissions?($|/|\.)|secrets?($|/|\.)|credentials?($|/|\.)|\.github/workflows/|\.gitlab-ci)'
   if grep -Eiq "$protected_pattern" <<<"$changed_files"; then
-    trace "$NAME" "jev.skip" "a protected path changed"
+    hard_skip="a protected path changed"
+  fi
+  if [[ -n "$hard_skip" ]]; then
+    trace "$NAME" "jev.skip" "$hard_skip"
     return 1
+  fi
+  if [[ -n "$accept_block" ]]; then
+    if [[ "$jev_mode" != "shadow" ]]; then
+      trace "$NAME" "jev.skip" "$accept_block"
+      return 1
+    fi
+    trace "$NAME" "jev.shadow" "not eligible to auto-accept ($accept_block); scoring anyway"
   fi
 
   local request_file response_file auth_file expected_ids run_rc=0
@@ -210,6 +218,22 @@ try_jev_auto_accept() {
   response_file="${critique_file%.json}.jev-response.json"
   jev_model="$requested_model"
   jev_attempted=true
+
+  # The diff often does not contain the regression test: it already lived in the
+  # tree, and verify ran it. Without that source, Jev treats "no test hunk" as
+  # "no test" and the gate pays for a generative reviewer on a covered change.
+  local verify_test_source="" token
+  if [[ "$verify_status" == "pass" && "$verify_soundness" == "sound" && -n "$verify_cmd" ]]; then
+    local -a verify_tokens=()
+    read -r -a verify_tokens <<< "$verify_cmd"
+    for token in "${verify_tokens[@]}"; do
+      [[ "$token" == *.py || "$token" == *.sh || "$token" == tests/* ]] || continue
+      [[ "$token" != /* && "$token" != [A-Za-z]:* ]] || continue
+      [[ -f "$worktree_path/$token" ]] || continue
+      verify_test_source=$(head -c 8000 "$worktree_path/$token" 2>/dev/null || true)
+      break
+    done
+  fi
 
   if ! jq -n \
     --arg model "$requested_model" \
@@ -219,6 +243,7 @@ try_jev_auto_accept() {
     --arg verify_cmd "$verify_cmd" \
     --arg diff_stat "$diff_stat" \
     --arg diff_text "$diff_body" \
+    --arg verify_test_source "$verify_test_source" \
     --argjson files "$task_files" \
     --argjson pitfalls "$task_pitfalls" '
       def noul($question; $bad; $clean): {
@@ -233,7 +258,7 @@ try_jev_auto_accept() {
         model: $model,
         state: {
           task: {prompt: $prompt, declared_files: $files, declared_pitfalls: $pitfalls},
-          verification: {status: $verify_status, soundness: $verify_soundness, command: $verify_cmd},
+          verification: {status: $verify_status, soundness: $verify_soundness, command: $verify_cmd, test_source: $verify_test_source},
           change: {stat: $diff_stat, diff: $diff_text}
         },
         questions: {
@@ -263,9 +288,9 @@ try_jev_auto_accept() {
             "Existing checks are preserved or strengthened"
           ),
           regression_test_missing: noul(
-            "Does the behavior changed by `change.diff` reasonably require a regression test that the diff fails to add or update?";
-            "Testable behavior changed but no meaningful test would fail without the change";
-            "A meaningful regression test exists, or this change does not reasonably require one"
+            "Does the behavior changed by `change.diff` reasonably require a regression test that neither the diff nor `verification.test_source` provides? An existing test that already asserts the changed behavior counts, even when the diff does not modify that test file, if `verification.status` is pass and `verification.soundness` is sound.";
+            "Testable behavior changed, the diff adds or updates no meaningful test, and `verification.test_source` does not already assert that behavior";
+            "The diff or `verification.test_source` already asserts the changed behavior, or this change does not reasonably require a regression test"
           )
         }
       }
@@ -658,7 +683,7 @@ case "$verdict" in
       echo
     fi
     echo "Next: send the issues back to the agent, e.g."
-    echo "  herdr agent prompt $NAME \"critique found: <paste the issues above>. Fix them and commit.\" --wait"
+    echo "  scripts/bounce.sh $NAME \"critique found: <paste the issues above>. Fix them and commit.\""
     echo "Cap this at 2 rounds, then take it to the user."
     exit 1
     ;;

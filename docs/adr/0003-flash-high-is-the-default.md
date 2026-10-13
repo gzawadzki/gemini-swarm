@@ -34,4 +34,10 @@ Evidence is one run. If flash-high starts bouncing on well-specified slices, thi
 is the decision to revisit first — and per ADR 0002 the run archive is what makes
 that judgeable instead of anecdotal.
 
+## Amendment (2026-09-25)
+
+Mechanical slices may use `gemini-3.8-flash` at effort `medium`. This does not
+change the default for ordinary non-mechanical Pi work, which stays
+`gemini-3.8-flash-high`. `low` is not the mechanical setting.
+
 Primary source: local working notes, `.scratch/swarm-rebuild-findings.md` §6. Untracked on purpose: they quote a private repository and this one is public.

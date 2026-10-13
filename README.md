@@ -1,22 +1,24 @@
 # gemini-swarm
 
-A skill for running parallel Pi agents through [herdr](https://github.com/herdr). Each task gets its own Git worktree and branch. The swarm checks the result before handing the diff back for review.
+A skill for orchestrating parallel agents from **Pi** through [herdr](https://github.com/herdr). Pi Antigravity workers handle bounded slices; Codex workers are also supported. Each task gets its own Git worktree and branch. The swarm verifies and critiques the result before handing the diff back for review. Claude Code is not required.
 
 ## Requirements
 
 - Run the orchestrator inside a herdr pane (`HERDR_ENV=1`).
 - Install `herdr`, `bash`, `git`, `jq`, Pi, and the `pi-antigravity` provider.
-- Sign in to Antigravity from Pi. Pi manages linked accounts; the swarm does not inspect credentials or quota.
+- Sign in to Antigravity from Pi. Pi manages linked accounts; the launcher checks available Antigravity quota before opening worker panes. See [accounts](docs/reference/accounts-and-quota.md) and [quota preflight](docs/reference/quota-preflight.md).
 
 ## Install
 
 ```bash
-git clone https://github.com/gzawadzki/gemini-swarm.git ~/.claude/skills/gemini-swarm
-chmod +x ~/.claude/skills/gemini-swarm/scripts/*.sh
+git clone https://github.com/gzawadzki/gemini-swarm.git ~/.agents/skills/gemini-swarm
+chmod +x ~/.agents/skills/gemini-swarm/scripts/*.sh
 pi install npm:pi-antigravity
 ```
 
-Start Pi and use `/login antigravity`, then restart Claude Code. Ask for the `gemini-swarm` skill and give it bounded coding tasks.
+Pi discovers skills in `~/.agents/skills/`. Start Pi inside a herdr-managed pane, use `/login antigravity`, then `/reload` if Pi was already running when you installed the skill.
+
+Invoke `/skill:herdr-gemini-swarm` and give Pi bounded coding tasks. The command uses the name declared in `SKILL.md`, not the clone directory name.
 
 ## Run manually
 
@@ -40,9 +42,10 @@ Create `tasks.json`:
 }
 ```
 
-Then run:
+Run the scripts from the skill checkout, or use their absolute paths from your project:
 
 ```bash
+# From ~/.agents/skills/gemini-swarm, with your task config:
 scripts/launch.sh --allow-unsandboxed tasks.json
 scripts/status.sh
 scripts/verify.sh fix-auth-bug
@@ -51,9 +54,19 @@ scripts/review.sh fix-auth-bug
 scripts/cleanup.sh --worktrees
 ```
 
-`verify` runs in the agent worktree and checks where the tested code resolved. A pass from another checkout is rejected; an unknown result is marked `skipped`. The critique records Jev risk signals, then uses a generative reviewer when needed. Jev automatic acceptance requires a passing, sound verification and explicit enablement. In shadow mode it records a score without accepting the diff. Read the handoff before merging. Cleanup archives the run under `~/.herdr/runs/`.
+`verify` runs in the agent worktree and checks where the tested code resolved. A pass from another checkout is rejected; an unknown result is marked `skipped`. The critique asks Jev first. A verified, sound, in-scope diff whose signals are all at or below the threshold is accepted without a generative reviewer. Anything else goes to that reviewer. Set `HERDR_SWARM_JEV_MODE=shadow` to score without accepting, or `disabled` to skip Jev. Read the handoff before merging. Cleanup archives the run under `~/.herdr/runs/`.
 
 Unattended workers require an explicit unsandboxed opt-in when no sandbox backend is available. Read the launch warning and [worker permissions](docs/reference/worker-permissions.md) before using it. A Git worktree separates files but does not confine the worker process.
+
+## Development checks
+
+Run the isolated tests from the repository root; they use fake tools rather than live worker panes:
+
+```bash
+for test in tests/test-*.sh; do bash "$test" || exit; done
+python tests/test-jev-eval.py
+python tests/test-run-outcome.py
+```
 
 ## References
 

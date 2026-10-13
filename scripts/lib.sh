@@ -19,6 +19,38 @@
 # --- Trace -------------------------------------------------------------------
 
 SWARM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load the repo .env before any default below reads it. Assignments already in
+# the environment win, so a test or a caller can still override one key. The
+# file is parsed as KEY=VALUE only; it is not sourced, so a line cannot run a
+# command. HERDR_SWARM_DOTENV=0 skips it, which the test harness sets so the
+# suite never sees the operator's keys.
+load_dotenv() {
+  local file="$1" line key val
+  [[ "${HERDR_SWARM_DOTENV:-1}" == "0" ]] && return 0
+  [[ -f "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" == export\ * ]] && line="${line#export }"
+    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    if [[ "$val" == \"*\" ]]; then
+      val="${val:1:${#val}-2}"
+    elif [[ "$val" == \'*\' ]]; then
+      val="${val:1:${#val}-2}"
+    fi
+    [[ -n "${!key+x}" ]] && continue
+    # Shell-local on purpose. Exporting would leak the operator's keys and
+    # Jev mode into verify's child test process. Each script sources lib.sh
+    # itself, so it still sees the file.
+    printf -v "$key" '%s' "$val"
+  done < "$file"
+}
+load_dotenv "${HERDR_SWARM_DOTENV_FILE:-$SWARM_LIB_DIR/../.env}"
+
 #
 # Off by default. Turned on with --trace on any script, or HERDR_SWARM_TRACE=1
 # for a whole session. Every external call the swarm makes gets one line in
@@ -50,6 +82,25 @@ trace() {
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 0
   printf '%s %-7s %-20s %-16s %s\n' \
     "$(date -u +%FT%TZ)" "$TRACE_SRC" "$task" "$event" "$*" >> "$file" 2>/dev/null || true
+}
+
+# A bounce is a measured fact, not a debug trace. Written even when --trace is
+# off, because run-outcome.py counts prompt.rework and a missing line is
+# unknown, not zero. The detail is a length, never the fix text.
+record_rework() {  # <task> <detail...>
+  local task="$1"; shift
+  local file; file=$(trace_file)
+  mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
+  printf '%s %-7s %-20s %-16s %s\n' \
+    "$(date -u +%FT%TZ)" "${TRACE_SRC:-bounce}" "$task" "prompt.rework" "$*" >> "$file"
+}
+
+rework_count() {  # <task>
+  local task="$1" file n
+  file=$(trace_file)
+  [[ -f "$file" ]] || { printf '0'; return 0; }
+  n=$(grep -cE "[[:space:]]${task}[[:space:]]+prompt\.rework([[:space:]]|$)" "$file" 2>/dev/null || true)
+  printf '%s' "${n:-0}"
 }
 
 # trace_run <task> <event> -- <cmd...>
@@ -523,19 +574,138 @@ scope_lines() {  # <prefix>
 #   unknown  this project's resolution could not be established at all
 # and SOUNDNESS_DETAIL to a sentence naming what was found.
 #
-# `unknown` is deliberately common. The mechanism below covers Python, which is
-# the only ecosystem where the trap has actually been observed; everywhere else
-# the honest answer is that nothing was established, and the caller must not
-# turn that into a pass. Widening it means adding a positive check per
-# ecosystem, never assuming soundness because a language looks safe.
-check_verify_soundness() {  # <worktree>
-  local worktree="$1"
+# `unknown` is deliberately common. Python is checked by where the module
+# resolves. A shell verify is checked only when its script path is inside the
+# worktree; a bare command such as `true` stays unknown. Neither check treats a
+# language as safe by default.
+#
+# A pytest command is different from a bare import. pytest prepends
+# `[tool.pytest.ini_options] pythonpath` to sys.path before site-packages, which
+# is why a pythonpath line beats an editable install pinned at another checkout.
+# That path is a positive resolution only when the verify command is pytest and
+# the listed directory actually contains the project module. A non-pytest
+# command does not get this credit: pythonpath in the manifest does not change
+# what `python -c` imports.
+pytest_pythonpath_entries() {  # <pyproject>
+  local file="$1" line
+  [[ -f "$file" ]] || return 0
+  # Only the pytest table. A pythonpath key in another tool must not count.
+  awk '
+    /^\[/ {
+      sect = ($0 ~ /^\[tool\.pytest(\.ini_options)?\][[:space:]]*$/)
+    }
+    sect && /^[[:space:]]*pythonpath[[:space:]]*=/ { grab = 1 }
+    grab { print }
+    grab && /\]/ { exit }
+  ' "$file" | while IFS= read -r line; do
+    while [[ "$line" =~ \"([^\"]*)\" ]]; do
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      line="${line#*\"${BASH_REMATCH[1]}\"}"
+    done
+    while [[ "$line" =~ \'([^\']*)\' ]]; do
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      line="${line#*\'${BASH_REMATCH[1]}\'}"
+    done
+  done
+}
+
+module_file_under() {  # <dir> <module>
+  local dir="$1" module="$2" candidate
+  for candidate in "$dir/$module/__init__.py" "$dir/$module.py"; do
+    [[ -f "$candidate" ]] || continue
+    printf '%s' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+path_inside_root() {  # <root-pwd-P> <path>
+  local root="$1" path="$2" dir base real
+  [[ -e "$path" ]] || return 1
+  dir=$(cd "$(dirname "$path")" && pwd -P) || return 1
+  base=$(basename "$path")
+  real="$dir/$base"
+  [[ "$real" == "$root" || "$real" == "$root"/* ]]
+}
+
+# pytest prepends pythonpath before site-packages. The first listed directory
+# that actually contains the project module is the import the suite will use.
+# Returns 0 when that decides soundness. A miss leaves the install probe to run.
+pytest_pythonpath_soundness() {  # <worktree> <pyproject> <module> <cmd>
+  local worktree="$1" pyproject="$2" module="$3" cmd="$4"
+  local root entry resolved origin
+  [[ "$cmd" == *pytest* ]] || return 1
+  root=$(cd "$worktree" && pwd -P) || return 1
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    if [[ "$entry" == /* || "$entry" == [A-Za-z]:* || "$entry" == [A-Za-z]:\* ]]; then
+      resolved="$entry"
+    else
+      resolved="$worktree/$entry"
+    fi
+    [[ -d "$resolved" ]] || continue
+    origin=$(module_file_under "$resolved" "$module") || continue
+    if path_inside_root "$root" "$origin"; then
+      SOUNDNESS="sound"
+      SOUNDNESS_DETAIL="module '$module' is on pytest pythonpath '$entry' inside the worktree ($origin)"
+    else
+      SOUNDNESS="unsound"
+      SOUNDNESS_DETAIL="module '$module' is on pytest pythonpath '$entry', which resolved outside the worktree: $origin"
+    fi
+    return 0
+  done < <(pytest_pythonpath_entries "$pyproject")
+  return 1
+}
+
+shell_verify_soundness() {  # <worktree> <cmd>
+  local worktree="$1" cmd="$2" root token path dir base real found=0 outside=""
+  [[ -n "$cmd" ]] || return 1
+  root=$(cd "$worktree" && pwd -P) || return 1
+  local -a tokens=()
+  read -r -a tokens <<< "$cmd"
+  for token in "${tokens[@]}"; do
+    [[ "$token" == *.sh ]] || continue
+    if [[ "$token" == /* || "$token" == [A-Za-z]:* || "$token" == [A-Za-z]:\\* ]]; then
+      path="$token"
+    else
+      path="$worktree/$token"
+    fi
+    if [[ ! -f "$path" ]]; then
+      outside="$token"
+      break
+    fi
+    dir=$(cd "$(dirname "$path")" && pwd -P) || { outside="$token"; break; }
+    base=$(basename "$path")
+    real="$dir/$base"
+    if [[ "$real" != "$root" && "$real" != "$root"/* ]]; then
+      outside="$real"
+      break
+    fi
+    found=1
+  done
+  if [[ -n "$outside" ]]; then
+    SOUNDNESS="unsound"
+    SOUNDNESS_DETAIL="verify script resolved outside the worktree: $outside"
+    return 0
+  fi
+  if [[ "$found" -eq 1 ]]; then
+    SOUNDNESS="sound"
+    SOUNDNESS_DETAIL="verify command runs a script inside the worktree"
+    return 0
+  fi
+  return 1
+}
+check_verify_soundness() {  # <worktree> [verify-cmd]
+  local worktree="$1" cmd="${2:-}"
   SOUNDNESS="unknown"
   SOUNDNESS_DETAIL=""
 
   local pyproject="$worktree/pyproject.toml"
   if [[ ! -f "$pyproject" ]]; then
-    SOUNDNESS_DETAIL="no pyproject.toml in the worktree, and only Python resolution can be checked so far"
+    if shell_verify_soundness "$worktree" "$cmd"; then
+      return 0
+    fi
+    SOUNDNESS_DETAIL="no pyproject.toml in the worktree, and the verify command names no script inside it"
     return 0
   fi
   if ! command -v python >/dev/null 2>&1; then
@@ -556,6 +726,12 @@ check_verify_soundness() {  # <worktree>
   module=${module//./_}
   if [[ -z "$module" ]]; then
     SOUNDNESS_DETAIL="pyproject.toml declares no project name, so there is no module to resolve"
+    return 0
+  fi
+
+  # pytest's own pythonpath wins over an editable install. Decide that from the
+  # files in the worktree, not from a probe whose cwd would hide the install.
+  if pytest_pythonpath_soundness "$worktree" "$pyproject" "$module" "$cmd"; then
     return 0
   fi
 
@@ -628,27 +804,25 @@ CRITIQUE_EFFORT="${HERDR_SWARM_CRITIQUE_EFFORT:-medium}"
 CRITIQUE_TIMEOUT="${HERDR_SWARM_CRITIQUE_TIMEOUT:-600}"
 
 # Jev evaluates typed risk signals for the judgement gate. Modes:
-#   shadow       record risk signals while sending all diffs to the generative reviewer (default)
-#   auto_accept  allow automatic acceptance when risk <= threshold and all preconditions pass
+#   auto_accept  approve a verified, clean, in-scope diff when every signal is at or below the threshold (default)
+#   shadow       record risk signals and still send the diff to the generative reviewer
 #   disabled     skip Jev calls entirely
 #
-# Shadow is the default until a labeled local evaluation demonstrates an
-# acceptable false-accept rate. Automatic acceptance requires explicit opt-in.
+# Unset is auto_accept. Shadow is only HERDR_SWARM_JEV_MODE=shadow.
+# HERDR_SWARM_JEV_AUTO_ACCEPT=0 or false still disables the call.
 JEV_MODE="${HERDR_SWARM_JEV_MODE:-}"
 if [[ -z "$JEV_MODE" ]]; then
-  if [[ "${HERDR_SWARM_JEV_AUTO_ACCEPT:-0}" == "1" || "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "true" ]]; then
-    JEV_MODE="auto_accept"
-  elif [[ "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "0" || "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "false" ]]; then
+  if [[ "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "0" || "${HERDR_SWARM_JEV_AUTO_ACCEPT:-}" == "false" ]]; then
     JEV_MODE="disabled"
   else
-    JEV_MODE="shadow"
+    JEV_MODE="auto_accept"
   fi
 fi
 case "$JEV_MODE" in
   auto_accept|auto-accept) JEV_MODE="auto_accept" ;;
   shadow)                  JEV_MODE="shadow" ;;
   disabled|off)            JEV_MODE="disabled" ;;
-  *)                       JEV_MODE="shadow" ;;
+  *)                       JEV_MODE="auto_accept" ;;
 esac
 
 JEV_AUTO_ACCEPT="${HERDR_SWARM_JEV_AUTO_ACCEPT:-0}"
@@ -657,10 +831,12 @@ JEV_ACCEPT_MAX="${HERDR_SWARM_JEV_ACCEPT_MAX:-0.10}"
 JEV_MODEL="${HERDR_SWARM_JEV_MODEL:-}"
 JEV_TIMEOUT="${HERDR_SWARM_JEV_TIMEOUT:-60}"
 
-# A model reviewing its own output shares its own blind spots, so a task that
-# was written by CRITIQUE_MODEL is reviewed by this one instead. It stays on the
-# Gemini pool so the swap costs no Claude/GPT quota.
-CRITIQUE_ALT_MODEL="${HERDR_SWARM_CRITIQUE_ALT_MODEL:-gemini-3.1-pro-high}"
+# When Jev does not approve, a diff written by CRITIQUE_MODEL is reviewed by
+# this model instead of the same thinking level that wrote it. The default is
+# gemini-3.8-flash at medium effort, not gemini-3.1-pro-high: same family, less
+# thinking, no Pro round-trip. It stays on the Gemini pool. Runtime thinking
+# still comes from CRITIQUE_EFFORT, which defaults to medium.
+CRITIQUE_ALT_MODEL="${HERDR_SWARM_CRITIQUE_ALT_MODEL:-gemini-3.8-flash-medium}"
 
 # The reviewer model for a task written by $1. Prints CRITIQUE_MODEL unless that
 # is the worker's own model, in which case it prints CRITIQUE_ALT_MODEL.

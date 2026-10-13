@@ -86,6 +86,18 @@ check  "skip duration is numeric" "number" "$(result '.duration_s | type')"
 check  "skip duration is non-negative" "true" "$(result '.duration_s >= 0')"
 
 echo
+echo "== 3b. a script inside the worktree is a positive shell check ="
+rm -f "$WT/pyproject.toml"
+mkdir -p "$WT/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$WT/tests/local.sh"
+write_state "bash tests/local.sh"
+out=$(verify); rc=$?
+check  "exit code"            "0"       "$rc"
+check  "status"               "pass"    "$(result .status)"
+check  "soundness recorded"   "sound"   "$(result .soundness)"
+rm -rf "$WT/tests"
+
+echo
 echo "== 4. the escape hatch disables the check, visibly =="
 make_python_project
 write_state "true"
@@ -126,7 +138,7 @@ out=$(verify) || true
 # The tests ran on this worktree's code and still failed, so the diff is what is
 # broken. Distinguishing this from scenario 10 is the whole point of asking.
 check  "soundness is explicit" "sound" "$(result .soundness)"
-grepok "sends it back to the agent" "herdr agent prompt" "$out"
+grepok "sends it back to the agent" "scripts/bounce.sh" "$out"
 
 echo
 echo "== 8. review.sh tells an unsound gate apart from a broken suite =="
@@ -215,5 +227,45 @@ check  "status"                 "skipped" "$(result .status)"
 check  "detail fits this path"  "true"    "$(result '.soundness_detail | test("no verify command")')"
 check  "nothing was asked here" "not checked" "$(result .soundness)"
 nogrep "does not blame a command" "did not pass" "$(result .soundness_detail)"
+
+echo
+echo "== 13. pytest pythonpath inside a src layout is a positive resolution =="
+rm -rf "$WT/demo_pkg" "$WT/src"
+mkdir -p "$WT/src/demo_pkg"
+: > "$WT/src/demo_pkg/__init__.py"
+printf '[project]\nname = "demo-pkg"\nversion = "0.1.0"\n\n[tool.pytest.ini_options]\npythonpath = ["src"]\n' > "$WT/pyproject.toml"
+write_state "python -m pytest -q tests/test_demo.py"
+export FAKE_PY_ORIGIN=""
+out=$(verify) || true
+check  "src pythonpath is sound" "sound" "$(result .soundness)"
+check  "status is a pass"        "pass"  "$(result .status)"
+grepok "names the pythonpath"    "pythonpath" "$out"
+
+echo
+echo "== 14. pytest pythonpath beats an install pinned outside the worktree =="
+export FAKE_PY_ORIGIN="$(native "$MAIN")/demo_pkg/__init__.py"
+out=$(verify) || true
+check  "pythonpath wins"         "sound" "$(result .soundness)"
+check  "not reported as unsound" "pass"  "$(result .status)"
+
+echo
+echo "== 15. pythonpath does not apply to a non-pytest command =="
+write_state "true"
+export FAKE_PY_ORIGIN=""
+out=$(verify) || true
+check  "bare command stays unknown" "unknown" "$(result .soundness)"
+check  "and is not a pass"          "skipped" "$(result .status)"
+export FAKE_PY_ORIGIN="$(native "$MAIN")/demo_pkg/__init__.py"
+out=$(verify) || true
+check  "install still wins without pytest" "unsound" "$(result .soundness)"
+
+echo
+echo "== 16. a pytest pythonpath outside the worktree is unsound =="
+printf '[project]\nname = "demo-pkg"\nversion = "0.1.0"\n\n[tool.pytest.ini_options]\npythonpath = ["%s"]\n' "$MAIN" > "$WT/pyproject.toml"
+write_state "pytest -q"
+export FAKE_PY_ORIGIN=""
+out=$(verify) || true
+check  "outside pythonpath is unsound" "unsound" "$(result .soundness)"
+check  "status fails closed"           "fail"    "$(result .status)"
 
 harness_summary
